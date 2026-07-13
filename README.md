@@ -14,6 +14,11 @@ Este guia assume **zero conhecimento técnico prévio**. São 4 etapas:
 
 Tempo estimado: 30–40 minutos na primeira vez.
 
+> **Novidade:** a tela de **Lançamentos** agora tem um bloco "Importar lançamentos por
+> planilha Excel", com botão para baixar um modelo `.xlsx` pronto e enviar a planilha
+> preenchida — ele lança várias receitas/despesas de uma vez, com pré-visualização e
+> aviso de linhas com erro antes de confirmar.
+
 ---
 
 ## Etapa 1 — Criar o banco de dados no Supabase
@@ -143,6 +148,15 @@ Para gerar a versão de produção manualmente: `npm run build` (gera a pasta `d
 
 Para adicionar, remover ou trocar senha de usuários: Supabase → **Authentication
 → Users**. Não é preciso mexer no código nem republicar o site.
+
+## Atualizando o site depois que já está no ar
+
+Sempre que eu (ou você) alterar os arquivos do app, é só subir os arquivos
+atualizados para o mesmo repositório no GitHub (Add file → Upload files,
+arrastando os arquivos novos por cima dos antigos — o GitHub substitui o
+conteúdo automaticamente quando o nome/caminho é igual). A Vercel detecta o
+novo commit e refaz o deploy sozinha, em 1–2 minutos, sem precisar mexer em
+nada no painel da Vercel.
 
 ## Dúvidas comuns
 

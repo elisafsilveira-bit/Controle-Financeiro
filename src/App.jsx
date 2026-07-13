@@ -9,6 +9,7 @@ import {
   LogOut, Calendar, AlertCircle, Check, X, Landmark
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
+import * as XLSX from "xlsx";
 
 /* ============================== CONSTANTES ============================== */
 
@@ -86,6 +87,134 @@ const fmtBRLCompact = (v) => {
   return String(Math.round(v || 0));
 };
 function catInfo(id) { return CATEGORIAS.find((c) => c.id === id) || {}; }
+
+/* ---------- Importação de planilha Excel ---------- */
+
+function normalizeStr(s) {
+  return String(s || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().trim();
+}
+
+function findCategoriaByLabel(raw) {
+  const alvo = normalizeStr(raw);
+  if (!alvo) return null;
+  return CATEGORIAS.find((c) => normalizeStr(c.label) === alvo) ||
+    CATEGORIAS.find((c) => normalizeStr(c.label).includes(alvo) || alvo.includes(normalizeStr(c.label))) ||
+    null;
+}
+
+function excelSerialToDate(serial) {
+  // Excel conta dias a partir de 1899-12-30
+  const utcDays = Math.floor(serial - 25569);
+  const utcValue = utcDays * 86400;
+  return new Date(utcValue * 1000);
+}
+
+function parseDataCell(v) {
+  if (v instanceof Date && !isNaN(v)) {
+    const y = v.getFullYear(), m = String(v.getMonth() + 1).padStart(2, "0"), d = String(v.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  if (typeof v === "number") {
+    const d = excelSerialToDate(v);
+    if (!isNaN(d)) return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+  }
+  const s = String(v || "").trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${String(m[2]).padStart(2, "0")}-${String(m[1]).padStart(2, "0")}`;
+  return null;
+}
+
+function parseValorCell(v) {
+  if (typeof v === "number") return v;
+  let s = String(v || "").trim().replace(/[R$\s]/g, "");
+  if (!s) return null;
+  // trata formato brasileiro 1.234,56
+  if (/,\d{1,2}$/.test(s)) s = s.replace(/\./g, "").replace(",", ".");
+  else s = s.replace(/,/g, "");
+  const n = Number(s);
+  return isNaN(n) ? null : n;
+}
+
+function parseEmpresaCell(v, empresas) {
+  const alvo = normalizeStr(v);
+  if (alvo === "a" || alvo === normalizeStr(empresas.a.nome)) return "a";
+  if (alvo === "b" || alvo === normalizeStr(empresas.b.nome)) return "b";
+  return null;
+}
+
+function getCell(row, ...nomes) {
+  const keys = Object.keys(row);
+  for (const nome of nomes) {
+    const alvo = normalizeStr(nome);
+    const achou = keys.find((k) => normalizeStr(k) === alvo);
+    if (achou !== undefined) return row[achou];
+  }
+  return undefined;
+}
+
+function baixarModeloExcel(empresas) {
+  const linhas = [
+    ["Data", "Empresa", "Categoria", "Valor", "Descrição"],
+    ["2026-07-05", "A", "Receita de Vendas", 15000, "Faturamento do mês"],
+    ["2026-07-06", "A", "Impostos sobre Vendas", 900, "Impostos sobre vendas"],
+    ["2026-07-10", "B", "Despesas com Pessoal", 8000, "Folha de pagamento"],
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(linhas);
+  ws["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 32 }, { wch: 12 }, { wch: 34 }];
+  XLSX.utils.book_append_sheet(wb, ws, "Lançamentos");
+  const wsCat = XLSX.utils.aoa_to_sheet([
+    ["Categorias aceitas (copie e cole exatamente como está aqui)"],
+    ...CATEGORIAS.map((c) => [c.label]),
+  ]);
+  wsCat["!cols"] = [{ wch: 42 }];
+  XLSX.utils.book_append_sheet(wb, wsCat, "Categorias válidas");
+  XLSX.writeFile(wb, "modelo-lancamentos.xlsx");
+}
+
+function parseLancamentosExcel(arrayBuffer, empresas) {
+  const wb = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  const validos = [];
+  const erros = [];
+  rows.forEach((row, idx) => {
+    const linhaNum = idx + 2; // +2 = considerando cabeçalho na linha 1
+    const dataRaw = getCell(row, "Data");
+    const empresaRaw = getCell(row, "Empresa", "CNPJ");
+    const categoriaRaw = getCell(row, "Categoria");
+    const valorRaw = getCell(row, "Valor");
+    const descricaoRaw = getCell(row, "Descrição", "Descricao", "Obs", "Observação");
+
+    if (!dataRaw && !empresaRaw && !categoriaRaw && !valorRaw) return; // linha em branco
+
+    const data = parseDataCell(dataRaw);
+    const cnpj = parseEmpresaCell(empresaRaw, empresas);
+    const categoria = findCategoriaByLabel(categoriaRaw);
+    const valor = parseValorCell(valorRaw);
+
+    const problemas = [];
+    if (!data) problemas.push("data inválida");
+    if (!cnpj) problemas.push("empresa não reconhecida (use A ou B)");
+    if (!categoria) problemas.push(`categoria não reconhecida ("${categoriaRaw}")`);
+    if (valor === null || valor <= 0) problemas.push("valor inválido");
+
+    if (problemas.length) {
+      erros.push({ linha: linhaNum, motivo: problemas.join(", ") });
+    } else {
+      validos.push({
+        id: Date.now() + idx,
+        cnpj, data, categoriaId: categoria.id, valor,
+        descricao: String(descricaoRaw || "").trim() || categoria.label,
+      });
+    }
+  });
+  return { validos, erros };
+}
 
 /* ============================== BANCO DE DADOS (Supabase) ==============================
    Usa uma tabela simples chave/valor "app_storage" (chave text PK, valor jsonb).
@@ -942,6 +1071,7 @@ function LancamentosView({ entries, empresas, persistEntries }) {
     setValor(""); setDescricao("");
   };
   const removeEntry = async (id) => { await persistEntries(entries.filter((e) => e.id !== id)); };
+  const importarEmLote = async (novosLancamentos) => { await persistEntries([...novosLancamentos, ...entries]); };
 
   const listados = entries
     .filter((e) => filtroCnpj === "todos" || e.cnpj === filtroCnpj)
@@ -951,6 +1081,7 @@ function LancamentosView({ entries, empresas, persistEntries }) {
   return (
     <div className="stack">
       <h2 className="view-title-only">Lançamentos</h2>
+      <ImportarExcel empresas={empresas} onImport={importarEmLote} />
       <div className="panel">
         <div className="panel-title">Novo lançamento</div>
         <form className="entry-form" onSubmit={addEntry}>
@@ -1014,6 +1145,137 @@ function LancamentosView({ entries, empresas, persistEntries }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function ImportarExcel({ empresas, onImport }) {
+  const [aberto, setAberto] = useState(false);
+  const [preview, setPreview] = useState(null); // { validos, erros, nomeArquivo }
+  const [processando, setProcessando] = useState(false);
+  const [importando, setImportando] = useState(false);
+  const [concluido, setConcluido] = useState(null);
+  const inputRef = React.useRef(null);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setProcessando(true);
+    setConcluido(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      const { validos, erros } = parseLancamentosExcel(buffer, empresas);
+      setPreview({ validos, erros, nomeArquivo: file.name });
+    } catch (err) {
+      console.error(err);
+      setPreview({ validos: [], erros: [{ linha: "-", motivo: "Não foi possível ler este arquivo. Confirme que é um .xlsx ou .csv válido." }], nomeArquivo: file.name });
+    }
+    setProcessando(false);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const confirmarImportacao = async () => {
+    if (!preview || preview.validos.length === 0) return;
+    setImportando(true);
+    await onImport(preview.validos);
+    setImportando(false);
+    setConcluido(preview.validos.length);
+    setPreview(null);
+  };
+
+  return (
+    <div className="panel">
+      <div className="panel-title-row">
+        <div className="panel-title">Importar lançamentos por planilha Excel</div>
+        <button className="btn-secondary" onClick={() => setAberto((s) => !s)}>
+          {aberto ? "Ocultar" : "Abrir"}
+        </button>
+      </div>
+      {aberto && (
+        <div className="import-box">
+          <p className="import-text">
+            Baixe o modelo, preencha uma linha para cada lançamento (usando exatamente os
+            nomes de categoria da aba "Categorias válidas" do modelo) e depois envie o
+            arquivo preenchido aqui.
+          </p>
+          <div className="import-actions">
+            <button className="btn-secondary" onClick={() => baixarModeloExcel(empresas)}>
+              <FileSpreadsheetIcon /> Baixar modelo (.xlsx)
+            </button>
+            <label className="btn-primary import-upload-btn">
+              <Plus size={14} /> Selecionar planilha
+              <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} hidden />
+            </label>
+          </div>
+
+          {processando && <div className="empty-note">Lendo arquivo…</div>}
+
+          {concluido !== null && (
+            <div className="import-success"><Check size={14} /> {concluido} lançamento(s) importado(s) com sucesso.</div>
+          )}
+
+          {preview && (
+            <div className="import-preview">
+              <div className="import-preview-summary">
+                <span><strong>{preview.nomeArquivo}</strong></span>
+                <span className="positive">{preview.validos.length} linha(s) válida(s)</span>
+                {preview.erros.length > 0 && <span className="negative">{preview.erros.length} linha(s) com problema</span>}
+              </div>
+
+              {preview.erros.length > 0 && (
+                <div className="table-scroll">
+                  <table className="ledger-table">
+                    <thead><tr><th>Linha</th><th>Problema</th></tr></thead>
+                    <tbody>
+                      {preview.erros.map((e, i) => <tr key={i}><td>{e.linha}</td><td>{e.motivo}</td></tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {preview.validos.length > 0 && (
+                <div className="table-scroll">
+                  <table className="ledger-table">
+                    <thead><tr><th>Data</th><th>Empresa</th><th>Categoria</th><th>Descrição</th><th className="num-cell">Valor</th></tr></thead>
+                    <tbody>
+                      {preview.validos.slice(0, 15).map((e) => {
+                        const c = catInfo(e.categoriaId);
+                        return (
+                          <tr key={e.id}>
+                            <td>{e.data.split("-").reverse().join("/")}</td>
+                            <td>{empresas[e.cnpj]?.nome}</td>
+                            <td>{c.label}</td>
+                            <td>{e.descricao}</td>
+                            <td className={"num-cell " + (c.tipo === "entrada" ? "positive" : "negative")}>{fmtBRL(e.valor)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {preview.validos.length > 15 && <div className="empty-note">…e mais {preview.validos.length - 15} linha(s).</div>}
+                </div>
+              )}
+
+              <div className="import-confirm-row">
+                <button className="btn-secondary" onClick={() => setPreview(null)}>Cancelar</button>
+                <button className="btn-primary" disabled={preview.validos.length === 0 || importando} onClick={confirmarImportacao}>
+                  {importando ? "Importando…" : `Confirmar importação de ${preview.validos.length} lançamento(s)`}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FileSpreadsheetIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6" />
+      <path d="M8 13h8M8 17h8M8 9h1" />
+    </svg>
   );
 }
 
@@ -1149,6 +1411,14 @@ input:focus, select:focus { outline:2px solid var(--teal); outline-offset:1px; b
 .entry-form-desc { grid-column:span 2; }
 .entry-form-submit { grid-column:span 1; height:38px; justify-content:center; }
 .filter-select { width:auto; }
+.import-box { display:flex; flex-direction:column; gap:12px; margin-top:6px; }
+.import-text { font-size:12.5px; color:var(--ink-soft); margin:0; line-height:1.5; }
+.import-actions { display:flex; gap:10px; flex-wrap:wrap; }
+.import-upload-btn { cursor:pointer; }
+.import-success { display:flex; align-items:center; gap:6px; background:#E4EFE9; border:1px solid var(--teal); color:#155444; padding:8px 12px; border-radius:6px; font-size:12.5px; }
+.import-preview { display:flex; flex-direction:column; gap:10px; border-top:1px solid var(--line); padding-top:12px; }
+.import-preview-summary { display:flex; gap:14px; flex-wrap:wrap; font-size:12.5px; }
+.import-confirm-row { display:flex; justify-content:flex-end; gap:10px; }
 .config-row { padding:12px 0; border-bottom:1px solid var(--line); }
 .config-row:last-of-type { border-bottom:none; }
 .config-row-title { font-weight:600; font-size:13px; margin-bottom:8px; }

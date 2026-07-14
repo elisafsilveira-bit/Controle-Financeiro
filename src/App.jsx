@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area
+  CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, ComposedChart
 } from "recharts";
 import {
   LayoutDashboard, FileText, Scale, Wallet, Settings, Building2,
   TrendingUp, TrendingDown, Plus, Trash2, Lock, User, Eye, EyeOff,
-  LogOut, Calendar, AlertCircle, Check, X, Landmark
+  LogOut, Calendar, AlertCircle, Check, X, Landmark, Percent
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as XLSX from "xlsx";
@@ -14,15 +14,52 @@ import * as XLSX from "xlsx";
 /* ============================== CONSTANTES ============================== */
 
 const CATEGORIAS = [
-  { id: "receita_vendas", label: "Receita de Vendas", grupo: "receitaBruta", tipo: "entrada", dre: true },
-  { id: "impostos_vendas", label: "Impostos sobre Vendas", grupo: "deducoes", tipo: "saida", dre: true },
-  { id: "cmv", label: "Custo de Mercadorias/Serviços (CMV)", grupo: "cmv", tipo: "saida", dre: true },
-  { id: "pessoal", label: "Despesas com Pessoal", grupo: "opPessoal", tipo: "saida", dre: true },
-  { id: "administrativas", label: "Despesas Administrativas", grupo: "opAdmin", tipo: "saida", dre: true },
-  { id: "comerciais", label: "Despesas Comerciais/Marketing", grupo: "opComercial", tipo: "saida", dre: true },
-  { id: "despesas_financeiras", label: "Despesas Financeiras/Juros", grupo: "despFin", tipo: "saida", dre: true },
-  { id: "receitas_financeiras", label: "Receitas Financeiras", grupo: "recFin", tipo: "entrada", dre: true },
-  { id: "ircsll", label: "IR / CSLL", grupo: "ircsll", tipo: "saida", dre: true },
+  // Receita Operacional Bruta
+  { id: "receita_vendas", label: "Venda de Mercadorias (Geral)", grupo: "receitaBruta", tipo: "entrada", dre: true },
+  { id: "venda_oculos_grau", label: "Venda de Óculos de Grau", grupo: "receitaBruta", tipo: "entrada", dre: true },
+  { id: "venda_armacoes", label: "Venda de Armações", grupo: "receitaBruta", tipo: "entrada", dre: true },
+  { id: "venda_lentes", label: "Venda de Lentes", grupo: "receitaBruta", tipo: "entrada", dre: true },
+  { id: "venda_oculos_sol", label: "Venda de Óculos de Sol", grupo: "receitaBruta", tipo: "entrada", dre: true },
+  { id: "venda_lentes_contato", label: "Venda de Lentes de Contato", grupo: "receitaBruta", tipo: "entrada", dre: true },
+  { id: "venda_acessorios", label: "Venda de Acessórios", grupo: "receitaBruta", tipo: "entrada", dre: true },
+
+  // Deduções da Receita Bruta
+  { id: "impostos_vendas", label: "DAS - Simples Nacional", grupo: "deducoes", tipo: "saida", dre: true },
+  { id: "devolucoes_cancelamentos", label: "Devoluções de Vendas e Cancelamentos", grupo: "deducoes", tipo: "saida", dre: true },
+
+  // Custo das Mercadorias Vendidas (CMV)
+  { id: "cmv", label: "Custo das Mercadorias Vendidas (Geral)", grupo: "cmv", tipo: "saida", dre: true },
+  { id: "custo_armacoes", label: "Custo de Armações", grupo: "cmv", tipo: "saida", dre: true },
+  { id: "custo_lentes_lab", label: "Custo de Lentes (Laboratório Terceiro)", grupo: "cmv", tipo: "saida", dre: true },
+  { id: "custo_outros_produtos", label: "Custo de Outros Produtos (óculos de sol, lentes de contato, acessórios)", grupo: "cmv", tipo: "saida", dre: true },
+
+  // Despesas com Vendas
+  { id: "comerciais", label: "Despesas Comerciais/Marketing (Outras)", grupo: "opVendas", tipo: "saida", dre: true },
+  { id: "comissoes_vendedores", label: "Comissões de Vendedores", grupo: "opVendas", tipo: "saida", dre: true },
+  { id: "taxas_cartao", label: "Taxas de Maquininha de Cartão", grupo: "opVendas", tipo: "saida", dre: true },
+  { id: "embalagens", label: "Embalagens", grupo: "opVendas", tipo: "saida", dre: true },
+  { id: "marketing_anuncios", label: "Marketing / Anúncios", grupo: "opVendas", tipo: "saida", dre: true },
+
+  // Despesas Administrativas
+  { id: "administrativas", label: "Despesas Administrativas (Outras)", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "pessoal", label: "Despesas com Pessoal (Outras)", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "pro_labore", label: "Pró-labore", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "salarios_equipe", label: "Salários da Equipe", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "fgts_inss", label: "FGTS / INSS", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "aluguel_loja", label: "Aluguel da Loja", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "agua_luz_internet", label: "Água, Luz e Internet", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "sistema_gestao", label: "Sistema de Gestão", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "material_expediente", label: "Material de Expediente", grupo: "opAdmin", tipo: "saida", dre: true },
+
+  // Resultado Financeiro
+  { id: "receitas_financeiras", label: "Receitas Financeiras (Outras)", grupo: "recFin", tipo: "entrada", dre: true },
+  { id: "descontos_fornecedores", label: "Descontos Obtidos de Fornecedores", grupo: "recFin", tipo: "entrada", dre: true },
+  { id: "rendimentos_aplicacao", label: "Rendimentos de Aplicação", grupo: "recFin", tipo: "entrada", dre: true },
+  { id: "despesas_financeiras", label: "Despesas Financeiras (Outras)", grupo: "despFin", tipo: "saida", dre: true },
+  { id: "juros_boletos_atraso", label: "Juros de Boletos em Atraso", grupo: "despFin", tipo: "saida", dre: true },
+  { id: "tarifas_bancarias", label: "Tarifas Bancárias PJ", grupo: "despFin", tipo: "saida", dre: true },
+
+  // Fora do DRE (movimentações patrimoniais/financeiras que não são resultado)
   { id: "aporte_socios", label: "Aporte de Sócios", grupo: null, tipo: "entrada", dre: false },
   { id: "emprestimo_entrada", label: "Empréstimo Recebido", grupo: null, tipo: "entrada", dre: false },
   { id: "emprestimo_pagamento", label: "Pagamento de Empréstimo", grupo: null, tipo: "saida", dre: false },
@@ -156,16 +193,24 @@ function getCell(row, ...nomes) {
   return undefined;
 }
 
+function parseStatusCell(v) {
+  const alvo = normalizeStr(v);
+  if (!alvo) return "liquidado"; // padrão: já pago/recebido (típico de extrato bancário/maquininha)
+  if (alvo.includes("pendente") || alvo.includes("aberto") || alvo.includes("a pagar") || alvo.includes("a receber")) return "pendente";
+  return "liquidado";
+}
+
 function baixarModeloExcel(empresas) {
   const linhas = [
-    ["Data", "Empresa", "Categoria", "Valor", "Descrição"],
-    ["2026-07-05", "A", "Receita de Vendas", 15000, "Faturamento do mês"],
-    ["2026-07-06", "A", "Impostos sobre Vendas", 900, "Impostos sobre vendas"],
-    ["2026-07-10", "B", "Despesas com Pessoal", 8000, "Folha de pagamento"],
+    ["Data de Competência", "Data de Pagamento/Recebimento", "Empresa", "Categoria", "Valor", "Status", "Descrição"],
+    ["2026-07-05", "2026-07-05", "A", "Venda de Óculos de Grau", 9500, "Pago/Recebido", "Faturamento do mês - à vista"],
+    ["2026-07-05", "2026-08-05", "A", "Venda de Armações", 3200, "Pendente", "Venda parcelada - só cai no caixa em agosto"],
+    ["2026-07-06", "2026-07-06", "A", "DAS - Simples Nacional", 900, "Pago/Recebido", "Guia DAS do mês"],
+    ["2026-07-10", "2026-07-10", "B", "Pró-labore", 8000, "Pago/Recebido", "Retirada do sócio"],
   ];
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(linhas);
-  ws["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 32 }, { wch: 12 }, { wch: 34 }];
+  ws["!cols"] = [{ wch: 16 }, { wch: 22 }, { wch: 10 }, { wch: 32 }, { wch: 12 }, { wch: 14 }, { wch: 34 }];
   XLSX.utils.book_append_sheet(wb, ws, "Lançamentos");
   const wsCat = XLSX.utils.aoa_to_sheet([
     ["Categorias aceitas (copie e cole exatamente como está aqui)"],
@@ -173,6 +218,18 @@ function baixarModeloExcel(empresas) {
   ]);
   wsCat["!cols"] = [{ wch: 42 }];
   XLSX.utils.book_append_sheet(wb, wsCat, "Categorias válidas");
+  const wsAjuda = XLSX.utils.aoa_to_sheet([
+    ["Coluna", "Obrigatório?", "O que é"],
+    ["Data de Competência", "Opcional (usa a data de pagamento se deixar em branco)", "Data da nota/emissão — usada na DRE"],
+    ["Data de Pagamento/Recebimento", "Sim (se Status = Pago/Recebido)", "Data em que o dinheiro entrou/saiu — usada no Fluxo de Caixa"],
+    ["Empresa", "Sim", "A ou B"],
+    ["Categoria", "Sim", "Copie da aba 'Categorias válidas'"],
+    ["Valor", "Sim", "Use ponto ou vírgula decimal"],
+    ["Status", "Opcional (padrão: Pago/Recebido)", "'Pago/Recebido' ou 'Pendente'"],
+    ["Descrição", "Opcional", "Texto livre"],
+  ]);
+  wsAjuda["!cols"] = [{ wch: 30 }, { wch: 42 }, { wch: 46 }];
+  XLSX.utils.book_append_sheet(wb, wsAjuda, "Como preencher");
   XLSX.writeFile(wb, "modelo-lancamentos.xlsx");
 }
 
@@ -184,21 +241,27 @@ function parseLancamentosExcel(arrayBuffer, empresas) {
   const erros = [];
   rows.forEach((row, idx) => {
     const linhaNum = idx + 2; // +2 = considerando cabeçalho na linha 1
-    const dataRaw = getCell(row, "Data");
-    const empresaRaw = getCell(row, "Empresa", "CNPJ");
-    const categoriaRaw = getCell(row, "Categoria");
-    const valorRaw = getCell(row, "Valor");
-    const descricaoRaw = getCell(row, "Descrição", "Descricao", "Obs", "Observação");
+    const dataCompetenciaRaw = getCell(row, "Data de Competência", "Data Competencia", "Competência", "Data Emissão", "Data de Emissão", "Data Movimento");
+    // aceita também planilhas antigas com uma coluna única "Data" (tratada como data de pagamento)
+    const dataCaixaRaw = getCell(row, "Data de Pagamento/Recebimento", "Data Pagamento", "Data Recebimento", "Data de Pagamento", "Data de Recebimento", "Data") || dataCompetenciaRaw;
+    const empresaRaw = getCell(row, "Empresa", "CNPJ", "Loja", "Filial");
+    const categoriaRaw = getCell(row, "Categoria", "Conta", "Plano de Contas");
+    const valorRaw = getCell(row, "Valor", "Valor (R$)", "Valor Total", "Montante");
+    const statusRaw = getCell(row, "Status", "Situação");
+    const descricaoRaw = getCell(row, "Descrição", "Descricao", "Obs", "Observação", "Histórico", "Lançamento");
 
-    if (!dataRaw && !empresaRaw && !categoriaRaw && !valorRaw) return; // linha em branco
+    if (!dataCaixaRaw && !dataCompetenciaRaw && !empresaRaw && !categoriaRaw && !valorRaw) return; // linha em branco
 
-    const data = parseDataCell(dataRaw);
+    const dataCaixa = parseDataCell(dataCaixaRaw);
+    const dataCompetencia = parseDataCell(dataCompetenciaRaw) || dataCaixa;
     const cnpj = parseEmpresaCell(empresaRaw, empresas);
     const categoria = findCategoriaByLabel(categoriaRaw);
     const valor = parseValorCell(valorRaw);
+    const status = parseStatusCell(statusRaw);
 
     const problemas = [];
-    if (!data) problemas.push("data inválida");
+    if (!dataCompetencia) problemas.push("data de competência inválida");
+    if (status === "liquidado" && !dataCaixa) problemas.push("data de pagamento/recebimento inválida");
     if (!cnpj) problemas.push("empresa não reconhecida (use A ou B)");
     if (!categoria) problemas.push(`categoria não reconhecida ("${categoriaRaw}")`);
     if (valor === null || valor <= 0) problemas.push("valor inválido");
@@ -208,13 +271,85 @@ function parseLancamentosExcel(arrayBuffer, empresas) {
     } else {
       validos.push({
         id: Date.now() + idx,
-        cnpj, data, categoriaId: categoria.id, valor,
+        cnpj, data: dataCompetencia, categoriaId: categoria.id, valor,
         descricao: String(descricaoRaw || "").trim() || categoria.label,
+        status, dataCaixa: status === "liquidado" ? dataCaixa : null,
       });
     }
   });
   return { validos, erros };
 }
+
+/* ---------- Importação do Relatório de Análise do Plano de Contas (para a DRE) ----------
+   Este relatório vem do sistema contábil já consolidado por conta (sem data por lançamento),
+   então cada linha vira UM lançamento de competência no mês/ano escolhido, com status
+   "pendente" (não afeta o Fluxo de Caixa — que é regime de caixa e já tem sua própria
+   importação). O sistema tenta classificar cada conta automaticamente por palavras-chave,
+   mas sempre mostra uma prévia para o usuário revisar/corrigir antes de confirmar. */
+
+const REGRAS_CLASSIFICACAO = [
+  [/pro.?labor/, "pro_labore"],
+  [/fgts|inss/, "fgts_inss"],
+  [/sal[aá]rio/, "salarios_equipe"],
+  [/aluguel/, "aluguel_loja"],
+  [/(agua|[aá]gua|luz|energia|internet|telefone)/, "agua_luz_internet"],
+  [/sistema.*gest|software/, "sistema_gestao"],
+  [/material.*expediente|papelaria/, "material_expediente"],
+  [/comiss/, "comissoes_vendedores"],
+  [/(maquineta|maquin|taxa.*cart[aã]o|adquirente)/, "taxas_cartao"],
+  [/embalag/, "embalagens"],
+  [/(marketing|propaganda|an[uú]ncio|publicidade)/, "marketing_anuncios"],
+  [/juros/, "juros_boletos_atraso"],
+  [/tarifa.*banc/, "tarifas_bancarias"],
+  [/desconto.*fornecedor/, "descontos_fornecedores"],
+  [/rendimento.*aplica|receita financeira/, "rendimentos_aplicacao"],
+  [/(^| )das( |$)|simples nacional/, "impostos_vendas"],
+  [/devolu[cç][aã]o|cancelamento/, "devolucoes_cancelamentos"],
+  [/(custo|cmv).*len[st]e/, "custo_lentes_lab"],
+  [/(custo|cmv).*arma[cç]/, "custo_armacoes"],
+  [/custo|cmv|mercadoria vendida/, "custo_outros_produtos"],
+  [/(venda|receita).*[oó]culos de grau|oculos de grau/, "venda_oculos_grau"],
+  [/(venda|receita).*len[st]e.*contato|lente de contato/, "venda_lentes_contato"],
+  [/(venda|receita).*[oó]culos de sol|oculos de sol/, "venda_oculos_sol"],
+  [/(venda|receita).*len[st]e/, "venda_lentes"],
+  [/(venda|receita).*arma[cç]/, "venda_armacoes"],
+  [/(venda|receita).*acess[oó]rio/, "venda_acessorios"],
+  [/venda|receita de vendas|faturamento/, "receita_vendas"],
+  [/despesa.*administrativ|administrativ/, "administrativas"],
+  [/despesa.*financeira|financeira/, "despesas_financeiras"],
+  [/despesa.*comercial|comercial/, "comerciais"],
+];
+
+function classificarConta(nomeConta) {
+  const alvo = normalizeStr(nomeConta);
+  for (const [regex, categoriaId] of REGRAS_CLASSIFICACAO) {
+    if (regex.test(alvo)) return categoriaId;
+  }
+  return null; // não identificado — usuário precisa escolher manualmente
+}
+
+function parsePlanoContasExcel(arrayBuffer) {
+  const wb = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  const linhas = [];
+  rows.forEach((row, idx) => {
+    const contaRaw = getCell(row, "Conta", "Descrição da Conta", "Descrição", "Histórico", "Nome da Conta", "Lançamento", "Título da Conta", "Classificação");
+    const valorRaw = getCell(row, "Valor", "Saldo", "Movimento", "Total", "Saldo Atual", "Valor (R$)", "Saldo do Período", "Valor Acumulado");
+    if (!contaRaw || valorRaw === "" || valorRaw === undefined) return;
+    const valor = Math.abs(parseValorCell(valorRaw) || 0);
+    if (!valor) return;
+    const categoriaSugerida = classificarConta(contaRaw);
+    linhas.push({
+      linhaId: idx,
+      conta: String(contaRaw).trim(),
+      valor,
+      categoriaId: categoriaSugerida, // pode ser null (não identificado)
+    });
+  });
+  return linhas;
+}
+
 
 /* ============================== BANCO DE DADOS (Supabase) ==============================
    Usa uma tabela simples chave/valor "app_storage" (chave text PK, valor jsonb).
@@ -303,7 +438,7 @@ export default function App() {
                 setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} />
             )}
             {view === "dre" && (
-              <DREView entries={entries} cnpjSel={cnpjSel}
+              <DREView entries={entries} cnpjSel={cnpjSel} empresas={empresas} persistEntries={persistEntries}
                 selectedYear={selectedYear} selectedMonth={selectedMonth}
                 setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} />
             )}
@@ -464,6 +599,12 @@ function signedValue(entry) {
   const c = catInfo(entry.categoriaId);
   return c.tipo === "entrada" ? entry.valor : -entry.valor;
 }
+function statusEfetivo(e) { return e.status || "liquidado"; }
+function dataCaixaEfetiva(e) { return e.dataCaixa || e.data; }
+function entriesCaixa(entries, cnpjSel) {
+  // Regime de caixa: só entra no Fluxo de Caixa o que já foi efetivamente pago/recebido
+  return filterEntries(entries, cnpjSel).filter((e) => statusEfetivo(e) === "liquidado");
+}
 function computeDRE(entries, cnpjSel, year, month) {
   const filtered = filterEntries(entries, cnpjSel).filter((e) => {
     const [y, m] = e.data.split("-").map(Number);
@@ -481,25 +622,27 @@ function computeDRE(entries, cnpjSel, year, month) {
   const receitaLiquida = receitaBruta - deducoes;
   const cmv = sums.cmv || 0;
   const lucroBruto = receitaLiquida - cmv;
-  const opPessoal = sums.opPessoal || 0;
+  const opVendas = sums.opVendas || 0;
   const opAdmin = sums.opAdmin || 0;
-  const opComercial = sums.opComercial || 0;
-  const despesasOperacionais = opPessoal + opAdmin + opComercial;
+  const despesasOperacionais = opVendas + opAdmin;
   const resultadoOperacional = lucroBruto - despesasOperacionais;
   const recFin = sums.recFin || 0;
   const despFin = sums.despFin || 0;
-  const resultadoAntesIR = resultadoOperacional + recFin - despFin;
-  const ircsll = sums.ircsll || 0;
-  const lucroLiquido = resultadoAntesIR - ircsll;
-  return { receitaBruta, deducoes, receitaLiquida, cmv, lucroBruto, opPessoal, opAdmin, opComercial,
-    despesasOperacionais, resultadoOperacional, recFin, despFin, resultadoAntesIR, ircsll, lucroLiquido };
+  const resultadoFinanceiro = recFin - despFin;
+  const lucroLiquido = resultadoOperacional + resultadoFinanceiro;
+  return { receitaBruta, deducoes, receitaLiquida, cmv, lucroBruto, opVendas, opAdmin,
+    despesasOperacionais, resultadoOperacional, recFin, despFin, resultadoFinanceiro, lucroLiquido };
 }
 function computeCaixaAcumulado(entries, cnpjSel, ateData) {
-  const filtered = filterEntries(entries, cnpjSel).filter((e) => e.data <= ateData);
+  const filtered = entriesCaixa(entries, cnpjSel).filter((e) => dataCaixaEfetiva(e) <= ateData);
   return filtered.reduce((acc, e) => acc + signedValue(e), 0);
 }
 function anosDisponiveis(entries) {
-  const set = new Set(entries.map((e) => Number(e.data.split("-")[0])));
+  const set = new Set();
+  entries.forEach((e) => {
+    set.add(Number(e.data.split("-")[0]));
+    set.add(Number(dataCaixaEfetiva(e).split("-")[0]));
+  });
   set.add(new Date().getFullYear());
   return Array.from(set).sort();
 }
@@ -510,7 +653,14 @@ function Dashboard({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedY
   const anos = anosDisponiveis(entries);
   const dreAtual = useMemo(() => computeDRE(entries, cnpjSel, selectedYear, selectedMonth), [entries, cnpjSel, selectedYear, selectedMonth]);
   const hojeStr = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-31`;
-  const saldoCaixa = useMemo(() => computeCaixaAcumulado(entries, cnpjSel, hojeStr), [entries, cnpjSel, hojeStr]);
+  const saldoFimMes = useMemo(() => computeCaixaAcumulado(entries, cnpjSel, hojeStr), [entries, cnpjSel, hojeStr]);
+  const saldoHoje = useMemo(() => computeCaixaAcumulado(entries, cnpjSel, new Date().toISOString().slice(0, 10)), [entries, cnpjSel]);
+
+  const geracaoCaixaMes = useMemo(() => {
+    return entriesCaixa(entries, cnpjSel)
+      .filter((e) => dataCaixaEfetiva(e).startsWith(`${selectedYear}-${String(selectedMonth).padStart(2, "0")}`))
+      .reduce((acc, e) => acc + signedValue(e), 0);
+  }, [entries, cnpjSel, selectedYear, selectedMonth]);
 
   const trend = useMemo(() => {
     const arr = [];
@@ -518,8 +668,15 @@ function Dashboard({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedY
       let m = selectedMonth - i, y = selectedYear;
       while (m <= 0) { m += 12; y -= 1; }
       const dre = computeDRE(entries, cnpjSel, y, m);
-      const despesas = dre.deducoes + dre.cmv + dre.despesasOperacionais + dre.despFin + dre.ircsll;
-      arr.push({ label: `${MESES[m - 1]}/${String(y).slice(2)}`, Faturamento: dre.receitaBruta, Despesas: despesas, Lucro: dre.lucroLiquido });
+      const despesas = dre.deducoes + dre.cmv + dre.despesasOperacionais + dre.despFin;
+      const mm = String(m).padStart(2, "0");
+      const geracaoCaixa = entriesCaixa(entries, cnpjSel)
+        .filter((e) => dataCaixaEfetiva(e).startsWith(`${y}-${mm}`))
+        .reduce((acc, e) => acc + signedValue(e), 0);
+      arr.push({
+        label: `${MESES[m - 1]}/${String(y).slice(2)}`, Faturamento: dre.receitaBruta, Despesas: despesas,
+        "Lucro Líquido (Competência)": dre.lucroLiquido, "Geração de Caixa (Caixa)": geracaoCaixa,
+      });
     }
     return arr;
   }, [entries, cnpjSel, selectedYear, selectedMonth]);
@@ -534,8 +691,19 @@ function Dashboard({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedY
     return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [entries, cnpjSel, selectedYear, selectedMonth]);
 
-  const despesasTotal = dreAtual.deducoes + dreAtual.cmv + dreAtual.despesasOperacionais + dreAtual.despFin + dreAtual.ircsll;
+  const despesasTotal = dreAtual.deducoes + dreAtual.cmv + dreAtual.despesasOperacionais + dreAtual.despFin;
   const margem = dreAtual.receitaBruta ? (dreAtual.lucroLiquido / dreAtual.receitaBruta) * 100 : 0;
+
+  const composicaoReceita = useMemo(() => {
+    if (!dreAtual.receitaBruta) return null;
+    return [{
+      nome: "Receita Bruta",
+      "Deduções": dreAtual.deducoes,
+      "CMV": dreAtual.cmv,
+      "Despesas Operacionais": dreAtual.despesasOperacionais,
+      "Resultado Operacional": Math.max(dreAtual.resultadoOperacional, 0),
+    }];
+  }, [dreAtual]);
 
   return (
     <div className="stack">
@@ -543,10 +711,12 @@ function Dashboard({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedY
         setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} showMonth />
       <div className="card-grid">
         <MetricCard label="Faturamento do mês" value={fmtBRL(dreAtual.receitaBruta)} icon={TrendingUp} tone="teal" />
+        <MetricCard label="Margem de lucro atual" value={`${margem.toFixed(1)}%`} icon={Percent} tone={margem >= 0 ? "teal" : "red"} sub={`Lucro líquido: ${fmtBRL(dreAtual.lucroLiquido)}`} />
+        <MetricCard label="Saldo em conta disponível hoje" value={fmtBRL(saldoHoje)} icon={Wallet} tone="gold" sub={`Em ${new Date().toLocaleDateString("pt-BR")}`} />
         <MetricCard label="Despesas do mês" value={fmtBRL(despesasTotal)} icon={TrendingDown} tone="red" />
-        <MetricCard label="Lucro líquido" value={fmtBRL(dreAtual.lucroLiquido)} icon={Scale} tone={dreAtual.lucroLiquido >= 0 ? "teal" : "red"} sub={`Margem: ${margem.toFixed(1)}%`} />
-        <MetricCard label="Saldo em caixa (acumulado)" value={fmtBRL(saldoCaixa)} icon={Wallet} tone="gold" />
+        <MetricCard label="Saldo em caixa no fim do mês" value={fmtBRL(saldoFimMes)} icon={Scale} tone={saldoFimMes >= 0 ? "teal" : "red"} />
       </div>
+
       <div className="chart-grid">
         <div className="panel">
           <div className="panel-title">Faturamento x Despesas — últimos 6 meses</div>
@@ -579,23 +749,50 @@ function Dashboard({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedY
           )}
         </div>
       </div>
+
       <div className="panel">
-        <div className="panel-title">Lucro líquido — tendência</div>
-        <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={trend}>
-            <defs>
-              <linearGradient id="lucroGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={COLORS.teal} stopOpacity={0.35} />
-                <stop offset="95%" stopColor={COLORS.teal} stopOpacity={0} />
-              </linearGradient>
-            </defs>
+        <div className="panel-title">Visão Unificada: Lucro Líquido (Competência) x Geração de Caixa (Caixa) — últimos 6 meses</div>
+        <div className="import-text" style={{ marginBottom: 6 }}>
+          Cruza o resultado econômico da DRE (o que foi vendido/gasto na competência) com o
+          que realmente entrou/saiu do caixa no mesmo mês — útil para ver se a empresa está
+          "lucrando no papel" mas sem caixa disponível, ou o contrário.
+        </div>
+        <ResponsiveContainer width="100%" height={280}>
+          <ComposedChart data={trend}>
             <CartesianGrid strokeDasharray="3 3" stroke="#D8DED4" vertical={false} />
             <XAxis dataKey="label" tick={{ fontSize: 12, fill: "#3C4A42" }} axisLine={{ stroke: "#C9CFC3" }} tickLine={false} />
             <YAxis tickFormatter={fmtBRLCompact} tick={{ fontSize: 11, fill: "#3C4A42" }} axisLine={false} tickLine={false} width={50} />
             <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 12, borderRadius: 8, border: "1px solid #C9CFC3" }} />
-            <Area type="monotone" dataKey="Lucro" stroke={COLORS.teal} strokeWidth={2} fill="url(#lucroGrad)" />
-          </AreaChart>
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Bar dataKey="Lucro Líquido (Competência)" fill={COLORS.teal} radius={[3, 3, 0, 0]} barSize={28} />
+            <Line type="monotone" dataKey="Geração de Caixa (Caixa)" stroke={COLORS.blue} strokeWidth={2.5} dot={{ r: 3 }} />
+          </ComposedChart>
         </ResponsiveContainer>
+      </div>
+
+      <div className="panel">
+        <div className="panel-title">CMV e Despesas Operacionais em relação à Receita Bruta — {MESES_LONGOS[selectedMonth - 1]}/{selectedYear}</div>
+        {!composicaoReceita ? (
+          <div className="empty-note">Sem receita lançada neste período.</div>
+        ) : (
+          <>
+            <ResponsiveContainer width="100%" height={130}>
+              <BarChart data={composicaoReceita} layout="vertical" margin={{ left: 10, right: 20 }}>
+                <XAxis type="number" tickFormatter={fmtBRLCompact} tick={{ fontSize: 11, fill: "#3C4A42" }} axisLine={false} tickLine={false} />
+                <YAxis type="category" dataKey="nome" tick={false} axisLine={false} width={0} />
+                <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 12, borderRadius: 8, border: "1px solid #C9CFC3" }} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="Deduções" stackId="a" fill={COLORS.gold} />
+                <Bar dataKey="CMV" stackId="a" fill={COLORS.red} />
+                <Bar dataKey="Despesas Operacionais" stackId="a" fill="#8C6D46" />
+                <Bar dataKey="Resultado Operacional" stackId="a" fill={COLORS.teal} radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+            <div className="formula-caption" style={{ padding: "4px 4px 0" }}>
+              Receita Bruta = {fmtBRL(dreAtual.receitaBruta)} · Lucro Líquido do mês (após resultado financeiro): {fmtBRL(dreAtual.lucroLiquido)}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -630,7 +827,7 @@ function PeriodBar({ anos, selectedYear, selectedMonth, setSelectedYear, setSele
 
 /* ============================== DRE ============================== */
 
-function DREView({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth }) {
+function DREView({ entries, cnpjSel, empresas, persistEntries, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth }) {
   const anos = anosDisponiveis(entries);
   const [modo, setModo] = useState("mensal");
   return (
@@ -642,6 +839,8 @@ function DREView({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedYea
           <button className={modo === "anual" ? "toggle-active" : ""} onClick={() => setModo("anual")}>Anual</button>
         </div>
       </div>
+      <ImportarPlanoContas empresas={empresas} entries={entries} persistEntries={persistEntries}
+        selectedYear={selectedYear} selectedMonth={selectedMonth} />
       <PeriodBar anos={anos} selectedYear={selectedYear} selectedMonth={selectedMonth}
         setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} showMonth={modo === "mensal"} />
       {modo === "mensal" ? (
@@ -654,20 +853,19 @@ function DREView({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedYea
 }
 
 const DRE_LINHAS = [
-  { key: "receitaBruta", label: "Receita Bruta de Vendas", bold: false, indent: 0 },
-  { key: "deducoes", label: "(–) Deduções / Impostos sobre Vendas", bold: false, indent: 0 },
-  { key: "receitaLiquida", label: "= Receita Líquida", bold: true, indent: 0, divider: true },
-  { key: "cmv", label: "(–) Custo das Mercadorias/Serviços (CMV)", bold: false, indent: 0 },
-  { key: "lucroBruto", label: "= Lucro Bruto", bold: true, indent: 0, divider: true },
-  { key: "opPessoal", label: "(–) Despesas com Pessoal", bold: false, indent: 1 },
-  { key: "opAdmin", label: "(–) Despesas Administrativas", bold: false, indent: 1 },
-  { key: "opComercial", label: "(–) Despesas Comerciais/Marketing", bold: false, indent: 1 },
-  { key: "resultadoOperacional", label: "= Resultado Operacional", bold: true, indent: 0, divider: true },
-  { key: "recFin", label: "(+) Receitas Financeiras", bold: false, indent: 0 },
-  { key: "despFin", label: "(–) Despesas Financeiras", bold: false, indent: 0 },
-  { key: "resultadoAntesIR", label: "= Resultado Antes do IR/CSLL", bold: true, indent: 0, divider: true },
-  { key: "ircsll", label: "(–) IR / CSLL", bold: false, indent: 0 },
-  { key: "lucroLiquido", label: "= LUCRO LÍQUIDO DO PERÍODO", bold: true, indent: 0, divider: true, highlight: true },
+  { key: "receitaBruta", label: "(=) Receita Operacional Bruta", bold: false, indent: 0 },
+  { key: "deducoes", label: "(–) Deduções da Receita Bruta", bold: false, indent: 0 },
+  { key: "receitaLiquida", label: "(=) Receita Operacional Líquida", bold: true, indent: 0, divider: true },
+  { key: "cmv", label: "(–) Custo das Mercadorias Vendidas (CMV)", bold: false, indent: 0 },
+  { key: "lucroBruto", label: "(=) Lucro Bruto", bold: true, indent: 0, divider: true },
+  { key: "opVendas", label: "Despesas com Vendas", bold: false, indent: 1 },
+  { key: "opAdmin", label: "Despesas Administrativas", bold: false, indent: 1 },
+  { key: "despesasOperacionais", label: "(–) Total Despesas Operacionais", bold: true, indent: 0, divider: true },
+  { key: "resultadoOperacional", label: "(=) Resultado Operacional antes do Result. Financeiro", bold: true, indent: 0, divider: true },
+  { key: "recFin", label: "(+) Receitas Financeiras", bold: false, indent: 1 },
+  { key: "despFin", label: "(–) Despesas Financeiras", bold: false, indent: 1 },
+  { key: "resultadoFinanceiro", label: "(=) Resultado Financeiro Líquido", bold: true, indent: 0, divider: true },
+  { key: "lucroLiquido", label: "(=) LUCRO OU PREJUÍZO LÍQUIDO DO PERÍODO", bold: true, indent: 0, divider: true, highlight: true },
 ];
 
 function DREMensal({ entries, cnpjSel, year, month }) {
@@ -874,6 +1072,11 @@ function BalancoLinha({ label, v }) { return <tr><td style={{ paddingLeft: 12 }}
 function FluxoCaixaView({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth }) {
   const anos = anosDisponiveis(entries);
   const [modo, setModo] = useState("mensal");
+
+  const pendentes = useMemo(() => filterEntries(entries, cnpjSel).filter((e) => statusEfetivo(e) === "pendente"), [entries, cnpjSel]);
+  const pendReceber = pendentes.filter((e) => catInfo(e.categoriaId).tipo === "entrada").reduce((a, e) => a + e.valor, 0);
+  const pendPagar = pendentes.filter((e) => catInfo(e.categoriaId).tipo === "saida").reduce((a, e) => a + e.valor, 0);
+
   return (
     <div className="stack">
       <div className="view-header">
@@ -884,6 +1087,21 @@ function FluxoCaixaView({ entries, cnpjSel, selectedYear, selectedMonth, setSele
           <button className={modo === "anual" ? "toggle-active" : ""} onClick={() => setModo("anual")}>Anual</button>
         </div>
       </div>
+      <div className="import-text" style={{ marginTop: -8 }}>
+        Este módulo segue o <strong>regime de caixa</strong>: só entram aqui os lançamentos já
+        marcados como <strong>pago/recebido</strong>, na data em que o dinheiro realmente
+        entrou ou saiu (não na data da nota).
+      </div>
+      {pendentes.length > 0 && (
+        <div className="panel pendencias-panel">
+          <div className="panel-title">Pendências (ainda não entraram no caixa)</div>
+          <div className="pendencias-row">
+            <span>A receber: <strong className="positive">{fmtBRL(pendReceber)}</strong></span>
+            <span>A pagar: <strong className="negative">{fmtBRL(pendPagar)}</strong></span>
+            <span className="empty-note" style={{ padding: 0, fontStyle: "normal" }}>({pendentes.length} lançamento(s) — marque como pago/recebido em Lançamentos)</span>
+          </div>
+        </div>
+      )}
       <PeriodBar anos={anos} selectedYear={selectedYear} selectedMonth={selectedMonth}
         setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} showMonth={modo === "diario"} />
       {modo === "diario" && <FluxoDiario entries={entries} cnpjSel={cnpjSel} year={selectedYear} month={selectedMonth} />}
@@ -894,18 +1112,18 @@ function FluxoCaixaView({ entries, cnpjSel, selectedYear, selectedMonth, setSele
 }
 
 function FluxoDiario({ entries, cnpjSel, year, month }) {
-  const filtered = filterEntries(entries, cnpjSel).filter((e) => {
-    const [y, m] = e.data.split("-").map(Number);
+  const filtered = entriesCaixa(entries, cnpjSel).filter((e) => {
+    const [y, m] = dataCaixaEfetiva(e).split("-").map(Number);
     return y === year && m === month;
   });
   const inicioMes = `${year}-${String(month).padStart(2, "0")}-01`;
   const saldoInicial = useMemo(() => {
-    const antes = filterEntries(entries, cnpjSel).filter((e) => e.data < inicioMes);
+    const antes = entriesCaixa(entries, cnpjSel).filter((e) => dataCaixaEfetiva(e) < inicioMes);
     return antes.reduce((acc, e) => acc + signedValue(e), 0);
   }, [entries, cnpjSel, inicioMes]);
   const porDia = {};
   filtered.forEach((e) => {
-    const dia = e.data;
+    const dia = dataCaixaEfetiva(e);
     if (!porDia[dia]) porDia[dia] = { entradas: 0, saidas: 0 };
     const c = catInfo(e.categoriaId);
     if (c.tipo === "entrada") porDia[dia].entradas += e.valor; else porDia[dia].saidas += e.valor;
@@ -914,14 +1132,15 @@ function FluxoDiario({ entries, cnpjSel, year, month }) {
   let acumulado = saldoInicial;
   const linhas = dias.map((d) => {
     const { entradas, saidas } = porDia[d];
+    const saldoAbertura = acumulado;
     acumulado += entradas - saidas;
-    return { data: d, entradas, saidas, saldoDia: entradas - saidas, acumulado };
+    return { data: d, saldoAbertura, entradas, saidas, saldoDia: entradas - saidas, acumulado };
   });
   const chartData = linhas.map((l) => ({ label: l.data.slice(8, 10), Saldo: l.acumulado }));
   return (
     <div className="stack">
       <div className="panel">
-        <div className="panel-title">Saldo acumulado no mês</div>
+        <div className="panel-title">Saldo acumulado no mês (regime de caixa)</div>
         <ResponsiveContainer width="100%" height={220}>
           <LineChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#D8DED4" vertical={false} />
@@ -934,16 +1153,17 @@ function FluxoDiario({ entries, cnpjSel, year, month }) {
       </div>
       <div className="panel ledger-panel table-scroll">
         <div className="panel-title">Saldo inicial do mês: {fmtBRL(saldoInicial)}</div>
-        {linhas.length === 0 ? <div className="empty-note">Sem lançamentos neste mês.</div> : (
+        <div className="formula-caption">Saldo Inicial + Entradas − Saídas = Saldo Final do Dia</div>
+        {linhas.length === 0 ? <div className="empty-note">Sem lançamentos pagos/recebidos neste mês.</div> : (
           <table className="ledger-table">
-            <thead><tr><th>Data</th><th className="num-cell">Entradas</th><th className="num-cell">Saídas</th><th className="num-cell">Saldo do Dia</th><th className="num-cell">Acumulado</th></tr></thead>
+            <thead><tr><th>Data</th><th className="num-cell">Saldo Inicial</th><th className="num-cell">Entradas</th><th className="num-cell">Saídas</th><th className="num-cell">Saldo Final do Dia</th></tr></thead>
             <tbody>
               {linhas.map((l) => (
                 <tr key={l.data}>
                   <td>{l.data.split("-").reverse().join("/")}</td>
+                  <td className="num-cell">{fmtBRL(l.saldoAbertura)}</td>
                   <td className="num-cell positive">{fmtBRL(l.entradas)}</td>
                   <td className="num-cell negative">{fmtBRL(l.saidas)}</td>
-                  <td className={"num-cell " + (l.saldoDia >= 0 ? "positive" : "negative")}>{fmtBRL(l.saldoDia)}</td>
                   <td className="num-cell row-bold">{fmtBRL(l.acumulado)}</td>
                 </tr>
               ))}
@@ -958,23 +1178,24 @@ function FluxoDiario({ entries, cnpjSel, year, month }) {
 function FluxoMensal({ entries, cnpjSel, year }) {
   const inicioAno = `${year}-01-01`;
   const saldoInicial = useMemo(() => {
-    const antes = filterEntries(entries, cnpjSel).filter((e) => e.data < inicioAno);
+    const antes = entriesCaixa(entries, cnpjSel).filter((e) => dataCaixaEfetiva(e) < inicioAno);
     return antes.reduce((acc, e) => acc + signedValue(e), 0);
   }, [entries, cnpjSel, inicioAno]);
   let acumulado = saldoInicial;
   const linhas = [];
   for (let m = 1; m <= 12; m++) {
     const mm = String(m).padStart(2, "0");
-    const filtered = filterEntries(entries, cnpjSel).filter((e) => e.data.startsWith(`${year}-${mm}`));
+    const filtered = entriesCaixa(entries, cnpjSel).filter((e) => dataCaixaEfetiva(e).startsWith(`${year}-${mm}`));
     let entradas = 0, saidas = 0;
     filtered.forEach((e) => { const c = catInfo(e.categoriaId); if (c.tipo === "entrada") entradas += e.valor; else saidas += e.valor; });
+    const saldoAbertura = acumulado;
     acumulado += entradas - saidas;
-    linhas.push({ mes: MESES[m - 1], entradas, saidas, saldoMes: entradas - saidas, acumulado });
+    linhas.push({ mes: MESES[m - 1], saldoAbertura, entradas, saidas, saldoMes: entradas - saidas, acumulado });
   }
   return (
     <div className="stack">
       <div className="panel">
-        <div className="panel-title">Entradas x Saídas por mês — {year}</div>
+        <div className="panel-title">Entradas x Saídas por mês (regime de caixa) — {year}</div>
         <ResponsiveContainer width="100%" height={260}>
           <BarChart data={linhas}>
             <CartesianGrid strokeDasharray="3 3" stroke="#D8DED4" vertical={false} />
@@ -989,15 +1210,16 @@ function FluxoMensal({ entries, cnpjSel, year }) {
       </div>
       <div className="panel ledger-panel">
         <div className="panel-title">Saldo inicial do ano: {fmtBRL(saldoInicial)}</div>
+        <div className="formula-caption">Saldo Inicial + Entradas − Saídas = Saldo Final do Mês</div>
         <table className="ledger-table">
-          <thead><tr><th>Mês</th><th className="num-cell">Entradas</th><th className="num-cell">Saídas</th><th className="num-cell">Saldo do Mês</th><th className="num-cell">Acumulado</th></tr></thead>
+          <thead><tr><th>Mês</th><th className="num-cell">Saldo Inicial</th><th className="num-cell">Entradas</th><th className="num-cell">Saídas</th><th className="num-cell">Saldo Final</th></tr></thead>
           <tbody>
             {linhas.map((l) => (
               <tr key={l.mes}>
                 <td>{l.mes}</td>
+                <td className="num-cell">{fmtBRL(l.saldoAbertura)}</td>
                 <td className="num-cell positive">{fmtBRL(l.entradas)}</td>
                 <td className="num-cell negative">{fmtBRL(l.saidas)}</td>
-                <td className={"num-cell " + (l.saldoMes >= 0 ? "positive" : "negative")}>{fmtBRL(l.saldoMes)}</td>
                 <td className="num-cell row-bold">{fmtBRL(l.acumulado)}</td>
               </tr>
             ))}
@@ -1011,16 +1233,17 @@ function FluxoMensal({ entries, cnpjSel, year }) {
 function FluxoAnual({ entries, cnpjSel, anos }) {
   let acumulado = 0;
   const linhas = anos.map((year) => {
-    const filtered = filterEntries(entries, cnpjSel).filter((e) => e.data.startsWith(`${year}`));
+    const filtered = entriesCaixa(entries, cnpjSel).filter((e) => dataCaixaEfetiva(e).startsWith(`${year}`));
     let entradas = 0, saidas = 0;
     filtered.forEach((e) => { const c = catInfo(e.categoriaId); if (c.tipo === "entrada") entradas += e.valor; else saidas += e.valor; });
+    const saldoAbertura = acumulado;
     acumulado += entradas - saidas;
-    return { ano: year, entradas, saidas, saldoAno: entradas - saidas, acumulado };
+    return { ano: year, saldoAbertura, entradas, saidas, saldoAno: entradas - saidas, acumulado };
   });
   return (
     <div className="stack">
       <div className="panel">
-        <div className="panel-title">Entradas x Saídas por ano</div>
+        <div className="panel-title">Entradas x Saídas por ano (regime de caixa)</div>
         <ResponsiveContainer width="100%" height={260}>
           <BarChart data={linhas}>
             <CartesianGrid strokeDasharray="3 3" stroke="#D8DED4" vertical={false} />
@@ -1034,15 +1257,16 @@ function FluxoAnual({ entries, cnpjSel, anos }) {
         </ResponsiveContainer>
       </div>
       <div className="panel ledger-panel">
+        <div className="formula-caption">Saldo Inicial + Entradas − Saídas = Saldo Final do Ano</div>
         <table className="ledger-table">
-          <thead><tr><th>Ano</th><th className="num-cell">Entradas</th><th className="num-cell">Saídas</th><th className="num-cell">Saldo do Ano</th><th className="num-cell">Acumulado</th></tr></thead>
+          <thead><tr><th>Ano</th><th className="num-cell">Saldo Inicial</th><th className="num-cell">Entradas</th><th className="num-cell">Saídas</th><th className="num-cell">Saldo Final</th></tr></thead>
           <tbody>
             {linhas.map((l) => (
               <tr key={l.ano}>
                 <td>{l.ano}</td>
+                <td className="num-cell">{fmtBRL(l.saldoAbertura)}</td>
                 <td className="num-cell positive">{fmtBRL(l.entradas)}</td>
                 <td className="num-cell negative">{fmtBRL(l.saidas)}</td>
-                <td className={"num-cell " + (l.saldoAno >= 0 ? "positive" : "negative")}>{fmtBRL(l.saldoAno)}</td>
                 <td className="num-cell row-bold">{fmtBRL(l.acumulado)}</td>
               </tr>
             ))}
@@ -1061,20 +1285,33 @@ function LancamentosView({ entries, empresas, persistEntries }) {
   const [categoriaId, setCategoriaId] = useState(CATEGORIAS[0].id);
   const [valor, setValor] = useState("");
   const [descricao, setDescricao] = useState("");
+  const [status, setStatus] = useState("liquidado");
+  const [dataCaixa, setDataCaixa] = useState(new Date().toISOString().slice(0, 10));
   const [filtroCnpj, setFiltroCnpj] = useState("todos");
+  const [filtroStatus, setFiltroStatus] = useState("todos");
+  const [marcandoPago, setMarcandoPago] = useState(null); // entry sendo marcada como paga
 
   const addEntry = async (e) => {
     e.preventDefault();
     if (!valor || Number(valor) <= 0) return;
-    const nova = { id: Date.now(), cnpj, data, categoriaId, valor: Number(valor), descricao: descricao || catInfo(categoriaId).label };
+    const nova = {
+      id: Date.now(), cnpj, data, categoriaId, valor: Number(valor),
+      descricao: descricao || catInfo(categoriaId).label,
+      status, dataCaixa: status === "liquidado" ? (dataCaixa || data) : null,
+    };
     await persistEntries([nova, ...entries]);
     setValor(""); setDescricao("");
   };
   const removeEntry = async (id) => { await persistEntries(entries.filter((e) => e.id !== id)); };
   const importarEmLote = async (novosLancamentos) => { await persistEntries([...novosLancamentos, ...entries]); };
+  const confirmarPagamento = async (id, novaDataCaixa) => {
+    await persistEntries(entries.map((e) => e.id === id ? { ...e, status: "liquidado", dataCaixa: novaDataCaixa } : e));
+    setMarcandoPago(null);
+  };
 
   const listados = entries
     .filter((e) => filtroCnpj === "todos" || e.cnpj === filtroCnpj)
+    .filter((e) => filtroStatus === "todos" || statusEfetivo(e) === filtroStatus)
     .sort((a, b) => (a.data < b.data ? 1 : -1))
     .slice(0, 200);
 
@@ -1093,7 +1330,7 @@ function LancamentosView({ entries, empresas, persistEntries }) {
             </select>
           </div>
           <div>
-            <label className="field-label">Data</label>
+            <label className="field-label">Data de Competência (nota/emissão)</label>
             <input type="date" value={data} onChange={(e) => setData(e.target.value)} required />
           </div>
           <div>
@@ -1106,36 +1343,75 @@ function LancamentosView({ entries, empresas, persistEntries }) {
             <label className="field-label">Valor (R$)</label>
             <input type="number" min="0" step="0.01" value={valor} onChange={(e) => setValor(e.target.value)} placeholder="0,00" required />
           </div>
+          <div>
+            <label className="field-label">Status (regime de caixa)</label>
+            <select value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="liquidado">Pago / Recebido</option>
+              <option value="pendente">Pendente (a pagar/receber)</option>
+            </select>
+          </div>
+          {status === "liquidado" && (
+            <div>
+              <label className="field-label">Data do Pagamento/Recebimento</label>
+              <input type="date" value={dataCaixa} onChange={(e) => setDataCaixa(e.target.value)} />
+            </div>
+          )}
           <div className="entry-form-desc">
             <label className="field-label">Descrição (opcional)</label>
             <input value={descricao} onChange={(e) => setDescricao(e.target.value)} placeholder="Ex.: NF 1234, pagamento fornecedor X…" />
           </div>
           <button type="submit" className="btn-primary entry-form-submit"><Plus size={15} /> Adicionar</button>
         </form>
+        <div className="import-text" style={{ marginTop: 10 }}>
+          A <strong>Data de Competência</strong> é usada na DRE. A <strong>Data de Pagamento/Recebimento</strong>
+          é usada no Fluxo de Caixa. Se marcar como "Pendente", o lançamento entra na DRE mas só aparece
+          no Fluxo de Caixa quando você marcá-lo como pago/recebido depois.
+        </div>
       </div>
       <div className="panel">
         <div className="panel-title-row">
           <div className="panel-title">Últimos lançamentos</div>
-          <select value={filtroCnpj} onChange={(e) => setFiltroCnpj(e.target.value)} className="filter-select">
-            <option value="todos">Todas as empresas</option>
-            <option value="a">{empresas.a.nome}</option>
-            <option value="b">{empresas.b.nome}</option>
-          </select>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select value={filtroStatus} onChange={(e) => setFiltroStatus(e.target.value)} className="filter-select">
+              <option value="todos">Todos os status</option>
+              <option value="liquidado">Pago / Recebido</option>
+              <option value="pendente">Pendente</option>
+            </select>
+            <select value={filtroCnpj} onChange={(e) => setFiltroCnpj(e.target.value)} className="filter-select">
+              <option value="todos">Todas as empresas</option>
+              <option value="a">{empresas.a.nome}</option>
+              <option value="b">{empresas.b.nome}</option>
+            </select>
+          </div>
         </div>
         <div className="table-scroll">
           <table className="ledger-table">
-            <thead><tr><th>Data</th><th>Empresa</th><th>Categoria</th><th>Descrição</th><th className="num-cell">Valor</th><th></th></tr></thead>
+            <thead><tr><th>Data Competência</th><th>Data Caixa</th><th>Empresa</th><th>Categoria</th><th>Descrição</th><th className="num-cell">Valor</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {listados.map((e) => {
                 const c = catInfo(e.categoriaId);
+                const st = statusEfetivo(e);
                 return (
                   <tr key={e.id}>
                     <td>{e.data.split("-").reverse().join("/")}</td>
+                    <td>{st === "liquidado" ? dataCaixaEfetiva(e).split("-").reverse().join("/") : "—"}</td>
                     <td>{empresas[e.cnpj]?.nome}</td>
                     <td>{c.label}</td>
                     <td>{e.descricao}</td>
                     <td className={"num-cell " + (c.tipo === "entrada" ? "positive" : "negative")}>{c.tipo === "entrada" ? "+" : "−"}{fmtBRL(e.valor)}</td>
-                    <td><button className="icon-btn" onClick={() => removeEntry(e.id)}><Trash2 size={14} /></button></td>
+                    <td>
+                      {st === "liquidado"
+                        ? <span className="status-badge status-pago">Pago/Recebido</span>
+                        : <span className="status-badge status-pendente">Pendente</span>}
+                    </td>
+                    <td style={{ display: "flex", gap: 4 }}>
+                      {st === "pendente" && (
+                        <button className="icon-btn" title="Marcar como pago/recebido" onClick={() => setMarcandoPago(e)}>
+                          <Check size={14} />
+                        </button>
+                      )}
+                      <button className="icon-btn" onClick={() => removeEntry(e.id)}><Trash2 size={14} /></button>
+                    </td>
                   </tr>
                 );
               })}
@@ -1144,6 +1420,182 @@ function LancamentosView({ entries, empresas, persistEntries }) {
           {listados.length === 0 && <div className="empty-note">Nenhum lançamento encontrado.</div>}
         </div>
       </div>
+
+      {marcandoPago && (
+        <MarcarPagoModal
+          entry={marcandoPago}
+          onCancel={() => setMarcandoPago(null)}
+          onConfirm={confirmarPagamento}
+        />
+      )}
+    </div>
+  );
+}
+
+function MarcarPagoModal({ entry, onCancel, onConfirm }) {
+  const [dataCaixa, setDataCaixa] = useState(new Date().toISOString().slice(0, 10));
+  const c = catInfo(entry.categoriaId);
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+        <div className="modal-header">
+          <div>Marcar como {c.tipo === "entrada" ? "Recebido" : "Pago"}</div>
+          <button className="icon-btn" onClick={onCancel}><X size={16} /></button>
+        </div>
+        <div className="modal-body">
+          <p className="import-text">{c.label} — {fmtBRL(entry.valor)} — {entry.descricao}</p>
+          <label className="field-label">Data do {c.tipo === "entrada" ? "recebimento" : "pagamento"}</label>
+          <input type="date" value={dataCaixa} onChange={(e) => setDataCaixa(e.target.value)} />
+        </div>
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={onCancel}>Cancelar</button>
+          <button className="btn-primary" onClick={() => onConfirm(entry.id, dataCaixa)}><Check size={14} /> Confirmar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, selectedMonth }) {
+  const [aberto, setAberto] = useState(false);
+  const [cnpj, setCnpj] = useState("a");
+  const [ano, setAno] = useState(selectedYear);
+  const [mes, setMes] = useState(selectedMonth);
+  const [linhas, setLinhas] = useState(null); // preview editável
+  const [nomeArquivo, setNomeArquivo] = useState("");
+  const [processando, setProcessando] = useState(false);
+  const [importando, setImportando] = useState(false);
+  const [concluido, setConcluido] = useState(null);
+  const inputRef = React.useRef(null);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setProcessando(true);
+    setConcluido(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      const contas = parsePlanoContasExcel(buffer);
+      setLinhas(contas);
+      setNomeArquivo(file.name);
+    } catch (err) {
+      console.error(err);
+      setLinhas([]);
+      setNomeArquivo(file.name);
+    }
+    setProcessando(false);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const atualizarCategoria = (linhaId, categoriaId) => {
+    setLinhas((prev) => prev.map((l) => l.linhaId === linhaId ? { ...l, categoriaId } : l));
+  };
+
+  const prontasParaImportar = (linhas || []).filter((l) => l.categoriaId);
+  const naoClassificadas = (linhas || []).filter((l) => !l.categoriaId);
+
+  const confirmarImportacao = async () => {
+    if (prontasParaImportar.length === 0) return;
+    setImportando(true);
+    const dataCompetencia = `${ano}-${String(mes).padStart(2, "0")}-${String(new Date(ano, mes, 0).getDate()).padStart(2, "0")}`;
+    const novos = prontasParaImportar.map((l, i) => ({
+      id: Date.now() + i,
+      cnpj, data: dataCompetencia, categoriaId: l.categoriaId, valor: l.valor,
+      descricao: `Plano de Contas: ${l.conta}`,
+      status: "pendente", dataCaixa: null, // só afeta a DRE (competência), não o Fluxo de Caixa
+    }));
+    await persistEntries([...novos, ...entries]);
+    setImportando(false);
+    setConcluido(novos.length);
+    setLinhas(null);
+  };
+
+  return (
+    <div className="panel">
+      <div className="panel-title-row">
+        <div className="panel-title">Importar Relatório de Análise do Plano de Contas (Excel)</div>
+        <button className="btn-secondary" onClick={() => setAberto((s) => !s)}>{aberto ? "Ocultar" : "Abrir"}</button>
+      </div>
+      {aberto && (
+        <div className="import-box">
+          <p className="import-text">
+            Suba aqui o relatório exportado do seu sistema contábil (com uma linha por conta e o
+            valor do período). O sistema tenta reconhecer automaticamente cada conta (receita,
+            custo, despesa etc.) e sugerir onde ela entra na DRE — revise a sugestão antes de
+            confirmar, já que a classificação automática pode errar em nomes de conta incomuns.
+            Esses lançamentos entram só na DRE (regime de competência) e não no Fluxo de Caixa.
+          </p>
+          <div className="import-actions" style={{ alignItems: "flex-end" }}>
+            <div>
+              <label className="field-label">Empresa</label>
+              <select value={cnpj} onChange={(e) => setCnpj(e.target.value)}>
+                <option value="a">{empresas.a.nome}</option>
+                <option value="b">{empresas.b.nome}</option>
+              </select>
+            </div>
+            <div>
+              <label className="field-label">Mês de referência</label>
+              <select value={mes} onChange={(e) => setMes(Number(e.target.value))}>
+                {MESES_LONGOS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="field-label">Ano</label>
+              <input type="number" value={ano} onChange={(e) => setAno(Number(e.target.value))} style={{ width: 90 }} />
+            </div>
+            <label className="btn-primary import-upload-btn">
+              <Plus size={14} /> Selecionar relatório
+              <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} hidden />
+            </label>
+          </div>
+
+          {processando && <div className="empty-note">Lendo arquivo…</div>}
+          {concluido !== null && (
+            <div className="import-success"><Check size={14} /> {concluido} conta(s) importada(s) para a DRE de {MESES_LONGOS[mes - 1]}/{ano}.</div>
+          )}
+
+          {linhas && (
+            <div className="import-preview">
+              <div className="import-preview-summary">
+                <span><strong>{nomeArquivo}</strong></span>
+                <span className="positive">{prontasParaImportar.length} conta(s) classificada(s)</span>
+                {naoClassificadas.length > 0 && <span className="negative">{naoClassificadas.length} conta(s) sem classificação — escolha manualmente abaixo</span>}
+              </div>
+              {linhas.length === 0 ? (
+                <div className="empty-note">Não encontrei colunas de conta/valor reconhecíveis nesse arquivo.</div>
+              ) : (
+                <div className="table-scroll">
+                  <table className="ledger-table">
+                    <thead><tr><th>Conta (original)</th><th className="num-cell">Valor</th><th>Classificação na DRE</th></tr></thead>
+                    <tbody>
+                      {linhas.map((l) => (
+                        <tr key={l.linhaId} className={!l.categoriaId ? "row-atencao" : ""}>
+                          <td>{l.conta}</td>
+                          <td className="num-cell">{fmtBRL(l.valor)}</td>
+                          <td>
+                            <select value={l.categoriaId || ""} onChange={(e) => atualizarCategoria(l.linhaId, e.target.value)}>
+                              <option value="" disabled>Selecionar categoria…</option>
+                              {CATEGORIAS.filter((c) => c.dre).map((c) => (
+                                <option key={c.id} value={c.id}>{c.label} {c.tipo === "entrada" ? "↑" : "↓"}</option>
+                              ))}
+                            </select>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="import-confirm-row">
+                <button className="btn-secondary" onClick={() => setLinhas(null)}>Cancelar</button>
+                <button className="btn-primary" disabled={prontasParaImportar.length === 0 || importando} onClick={confirmarImportacao}>
+                  {importando ? "Importando…" : `Confirmar importação de ${prontasParaImportar.length} conta(s) para ${MESES_LONGOS[mes - 1]}/${ano}`}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1194,8 +1646,10 @@ function ImportarExcel({ empresas, onImport }) {
         <div className="import-box">
           <p className="import-text">
             Baixe o modelo, preencha uma linha para cada lançamento (usando exatamente os
-            nomes de categoria da aba "Categorias válidas" do modelo) e depois envie o
-            arquivo preenchido aqui.
+            nomes de categoria da aba "Categorias válidas" e as instruções da aba "Como
+            preencher") e depois envie o arquivo preenchido aqui. Serve tanto para lançar
+            manualmente quanto para importar o extrato do banco ou o relatório da maquininha
+            de cartão — nesse caso, deixe o Status como "Pago/Recebido" para cada linha.
           </p>
           <div className="import-actions">
             <button className="btn-secondary" onClick={() => baixarModeloExcel(empresas)}>
@@ -1235,17 +1689,19 @@ function ImportarExcel({ empresas, onImport }) {
               {preview.validos.length > 0 && (
                 <div className="table-scroll">
                   <table className="ledger-table">
-                    <thead><tr><th>Data</th><th>Empresa</th><th>Categoria</th><th>Descrição</th><th className="num-cell">Valor</th></tr></thead>
+                    <thead><tr><th>Competência</th><th>Pagto/Receb.</th><th>Empresa</th><th>Categoria</th><th>Descrição</th><th className="num-cell">Valor</th><th>Status</th></tr></thead>
                     <tbody>
                       {preview.validos.slice(0, 15).map((e) => {
                         const c = catInfo(e.categoriaId);
                         return (
                           <tr key={e.id}>
                             <td>{e.data.split("-").reverse().join("/")}</td>
+                            <td>{e.dataCaixa ? e.dataCaixa.split("-").reverse().join("/") : "—"}</td>
                             <td>{empresas[e.cnpj]?.nome}</td>
                             <td>{c.label}</td>
                             <td>{e.descricao}</td>
                             <td className={"num-cell " + (c.tipo === "entrada" ? "positive" : "negative")}>{fmtBRL(e.valor)}</td>
+                            <td>{e.status === "liquidado" ? <span className="status-badge status-pago">Pago/Receb.</span> : <span className="status-badge status-pendente">Pendente</span>}</td>
                           </tr>
                         );
                       })}
@@ -1368,7 +1824,7 @@ html, body, #root { height: 100%; margin: 0; }
 .toggle-group { display:flex; gap:2px; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:3px; }
 .toggle-group button { border:none; background:transparent; padding:6px 14px; border-radius:6px; font-size:12.5px; font-weight:500; color:var(--ink-soft); cursor:pointer; }
 .toggle-active { background:var(--ink) !important; color:#fff !important; }
-.card-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+.card-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:14px; }
 .metric-card { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:16px 18px; border-top:3px solid var(--teal); }
 .metric-card.tone-red { border-top-color:var(--red); }
 .metric-card.tone-gold { border-top-color:var(--gold); }
@@ -1419,6 +1875,14 @@ input:focus, select:focus { outline:2px solid var(--teal); outline-offset:1px; b
 .import-preview { display:flex; flex-direction:column; gap:10px; border-top:1px solid var(--line); padding-top:12px; }
 .import-preview-summary { display:flex; gap:14px; flex-wrap:wrap; font-size:12.5px; }
 .import-confirm-row { display:flex; justify-content:flex-end; gap:10px; }
+.status-badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:10.5px; font-weight:600; white-space:nowrap; }
+.status-pago { background:#E4EFE9; color:#155444; }
+.status-pendente { background:#FBEFD8; color:#8A5A16; }
+.formula-caption { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); padding:0 20px 10px; }
+.pendencias-panel { border-left:3px solid var(--gold); }
+.pendencias-row { display:flex; gap:20px; flex-wrap:wrap; align-items:center; font-size:13px; }
+.row-atencao td { background:#FBF3E3; }
+.row-atencao select { border-color:var(--gold); }
 .config-row { padding:12px 0; border-bottom:1px solid var(--line); }
 .config-row:last-of-type { border-bottom:none; }
 .config-row-title { font-weight:600; font-size:13px; margin-bottom:8px; }

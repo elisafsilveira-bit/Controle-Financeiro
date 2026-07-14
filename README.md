@@ -18,6 +18,22 @@ Tempo estimado: 30–40 minutos na primeira vez.
 > planilha Excel", com botão para baixar um modelo `.xlsx` pronto e enviar a planilha
 > preenchida — ele lança várias receitas/despesas de uma vez, com pré-visualização e
 > aviso de linhas com erro antes de confirmar.
+>
+> **Novidade:** cada lançamento agora tem **Data de Competência** (usada na DRE) e
+> **Data de Pagamento/Recebimento** + **Status** (Pago/Recebido ou Pendente), usados
+> no **Fluxo de Caixa** (regime de caixa de verdade — só conta o que já foi liquidado).
+> Dá para marcar uma pendência como paga depois, na própria tela de Lançamentos.
+>
+> **Novidade:** a tela de **DRE** agora tem um bloco para importar o **Relatório de
+> Análise do Plano de Contas** (Excel) exportado do seu sistema contábil. O app tenta
+> reconhecer automaticamente cada conta pelo nome (receita, custo, despesa etc.) e
+> sugere onde ela entra na DRE — você revisa/corrige a classificação numa prévia antes
+> de confirmar. Esses lançamentos entram só na DRE (competência), não no Fluxo de Caixa.
+>
+> **Novidade:** o **Dashboard** agora cruza DRE (competência) com Fluxo de Caixa (caixa)
+> na mesma tela: gráfico comparando Lucro Líquido x Geração de Caixa mês a mês, gráfico
+> mostrando o peso do CMV e das Despesas Operacionais sobre a Receita Bruta, e cartões
+> de Margem de Lucro Atual e Saldo em Conta Disponível Hoje.
 
 ---
 

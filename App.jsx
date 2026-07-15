@@ -6,7 +6,7 @@ import {
 import {
   LayoutDashboard, FileText, Scale, Wallet, Settings, Building2,
   TrendingUp, TrendingDown, Plus, Trash2, Lock, User, Eye, EyeOff,
-  LogOut, Calendar, AlertCircle, Check, X, Landmark, Percent
+  LogOut, Calendar, AlertCircle, Check, X, Landmark, Percent, Pencil
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as XLSX from "xlsx";
@@ -823,7 +823,15 @@ function Dashboard({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedY
     });
     const map = {};
     filtered.forEach((e) => { const label = catInfo(e.categoriaId).label; map[label] = (map[label] || 0) + e.valor; });
-    return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+    const ordenado = Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+    const TOP_N = 7;
+    if (ordenado.length > TOP_N) {
+      const top = ordenado.slice(0, TOP_N);
+      const outros = ordenado.slice(TOP_N).reduce((acc, x) => acc + x.value, 0);
+      top.push({ name: `Outros (${ordenado.length - TOP_N} categorias)`, value: outros });
+      return top;
+    }
+    return ordenado;
   }, [entries, cnpjSel, selectedYear, selectedMonth]);
 
   const despesasTotal = dreAtual.deducoes + dreAtual.cmv + dreAtual.despesasOperacionais + dreAtual.despFin;
@@ -872,13 +880,13 @@ function Dashboard({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedY
           {breakdown.length === 0 ? (
             <div className="empty-note">Sem despesas lançadas neste período.</div>
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <PieChart>
-                <Pie data={breakdown} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={95} innerRadius={50} paddingAngle={2}>
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart margin={{ top: 10, right: 10, bottom: 10, left: 0 }}>
+                <Pie data={breakdown} dataKey="value" nameKey="name" cx="34%" cy="50%" outerRadius={85} innerRadius={48} paddingAngle={2}>
                   {breakdown.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                 </Pie>
                 <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ fontFamily: "IBM Plex Mono, monospace", fontSize: 12, borderRadius: 8, border: "1px solid #C9CFC3" }} />
-                <Legend wrapperStyle={{ fontSize: 11 }} layout="vertical" align="right" verticalAlign="middle" />
+                <Legend wrapperStyle={{ fontSize: 11, lineHeight: "18px", maxWidth: "56%" }} layout="vertical" align="right" verticalAlign="middle" />
               </PieChart>
             </ResponsiveContainer>
           )}
@@ -1427,6 +1435,7 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
   const [filtroCnpj, setFiltroCnpj] = useState("todos");
   const [filtroStatus, setFiltroStatus] = useState("todos");
   const [marcandoPago, setMarcandoPago] = useState(null); // entry sendo marcada como paga
+  const [editando, setEditando] = useState(null); // entry sendo editada
 
   const addEntry = async (e) => {
     e.preventDefault();
@@ -1444,6 +1453,10 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
   const confirmarPagamento = async (id, novaDataCaixa) => {
     await persistEntries(entries.map((e) => e.id === id ? { ...e, status: "liquidado", dataCaixa: novaDataCaixa } : e));
     setMarcandoPago(null);
+  };
+  const salvarEdicao = async (id, alteracoes) => {
+    await persistEntries(entries.map((e) => e.id === id ? { ...e, ...alteracoes } : e));
+    setEditando(null);
   };
 
   const listados = entries
@@ -1558,6 +1571,9 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
                             <Check size={14} />
                           </button>
                         )}
+                        <button className="icon-btn" title="Editar lançamento" onClick={() => setEditando(e)}>
+                          <Pencil size={14} />
+                        </button>
                         <button className="icon-btn" onClick={() => removeEntry(e.id)}><Trash2 size={14} /></button>
                       </td>
                     )}
@@ -1577,6 +1593,84 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
           onConfirm={confirmarPagamento}
         />
       )}
+      {!readOnly && editando && (
+        <EditarLancamentoModal
+          entry={editando}
+          empresas={empresas}
+          onCancel={() => setEditando(null)}
+          onSave={salvarEdicao}
+        />
+      )}
+    </div>
+  );
+}
+
+function EditarLancamentoModal({ entry, empresas, onCancel, onSave }) {
+  const [cnpj, setCnpj] = useState(entry.cnpj);
+  const [data, setData] = useState(entry.data);
+  const [categoriaId, setCategoriaId] = useState(entry.categoriaId);
+  const [valor, setValor] = useState(entry.valor);
+  const [descricao, setDescricao] = useState(entry.descricao || "");
+  const [status, setStatus] = useState(statusEfetivo(entry));
+  const [dataCaixa, setDataCaixa] = useState(entry.dataCaixa || entry.data);
+
+  const salvar = () => {
+    if (!valor || Number(valor) <= 0) return;
+    onSave(entry.id, {
+      cnpj, data, categoriaId, valor: Number(valor), descricao,
+      status, dataCaixa: status === "liquidado" ? (dataCaixa || data) : null,
+    });
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+        <div className="modal-header">
+          <div>Editar Lançamento</div>
+          <button className="icon-btn" onClick={onCancel}><X size={16} /></button>
+        </div>
+        <div className="modal-body">
+          <label className="field-label">Empresa</label>
+          <select value={cnpj} onChange={(e) => setCnpj(e.target.value)} style={{ marginBottom: 12 }}>
+            <option value="a">{empresas.a.nome}</option>
+            <option value="b">{empresas.b.nome}</option>
+          </select>
+          <label className="field-label">Data de Competência</label>
+          <input type="date" value={data} onChange={(e) => setData(e.target.value)} style={{ marginBottom: 12 }} />
+          <label className="field-label">Categoria</label>
+          <select value={categoriaId} onChange={(e) => setCategoriaId(e.target.value)} style={{ marginBottom: 12 }}>
+            <optgroup label="Contas de resultado (entram na DRE)">
+              {CATEGORIAS.filter((c) => c.dre).map((c) => (
+                <option key={c.id} value={c.id}>{c.label} {c.tipo === "entrada" ? "↑" : "↓"}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Fora da DRE (financiamento/patrimônio)">
+              {CATEGORIAS.filter((c) => !c.dre).map((c) => (
+                <option key={c.id} value={c.id}>{c.label} {c.tipo === "entrada" ? "↑" : "↓"}</option>
+              ))}
+            </optgroup>
+          </select>
+          <label className="field-label">Valor (R$)</label>
+          <input type="number" min="0" step="0.01" value={valor} onChange={(e) => setValor(e.target.value)} style={{ marginBottom: 12 }} />
+          <label className="field-label">Status (regime de caixa)</label>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ marginBottom: 12 }}>
+            <option value="liquidado">Pago / Recebido</option>
+            <option value="pendente">Pendente (a pagar/receber)</option>
+          </select>
+          {status === "liquidado" && (
+            <>
+              <label className="field-label">Data do Pagamento/Recebimento</label>
+              <input type="date" value={dataCaixa} onChange={(e) => setDataCaixa(e.target.value)} style={{ marginBottom: 12 }} />
+            </>
+          )}
+          <label className="field-label">Descrição</label>
+          <input value={descricao} onChange={(e) => setDescricao(e.target.value)} />
+        </div>
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={onCancel}>Cancelar</button>
+          <button className="btn-primary" onClick={salvar}><Check size={14} /> Salvar Alterações</button>
+        </div>
+      </div>
     </div>
   );
 }

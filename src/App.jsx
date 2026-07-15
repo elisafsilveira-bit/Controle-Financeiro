@@ -551,6 +551,7 @@ export default function App() {
     nome: session.user.user_metadata?.nome || session.user.email,
     cargo: session.user.user_metadata?.cargo || "Usuário",
     email: session.user.email,
+    readOnly: session.user.user_metadata?.acesso === "leitura",
   };
 
   return (
@@ -574,12 +575,12 @@ export default function App() {
             {view === "dre" && (
               <DREView entries={entries} cnpjSel={cnpjSel} empresas={empresas} persistEntries={persistEntries}
                 selectedYear={selectedYear} selectedMonth={selectedMonth}
-                setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} />
+                setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} readOnly={user.readOnly} />
             )}
             {view === "balanco" && (
               <BalancoView balancos={balancos} cnpjSel={cnpjSel} empresas={empresas}
                 selectedYear={selectedYear} setSelectedYear={setSelectedYear}
-                persistBalancos={persistBalancos} />
+                persistBalancos={persistBalancos} readOnly={user.readOnly} />
             )}
             {view === "fluxo" && (
               <FluxoCaixaView entries={entries} cnpjSel={cnpjSel}
@@ -587,10 +588,10 @@ export default function App() {
                 setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} />
             )}
             {view === "lancamentos" && (
-              <LancamentosView entries={entries} empresas={empresas} persistEntries={persistEntries} />
+              <LancamentosView entries={entries} empresas={empresas} persistEntries={persistEntries} readOnly={user.readOnly} />
             )}
             {view === "config" && (
-              <ConfiguracoesView empresas={empresas} persistEmpresas={persistEmpresas} user={user} />
+              <ConfiguracoesView empresas={empresas} persistEmpresas={persistEmpresas} user={user} readOnly={user.readOnly} />
             )}
           </div>
         )}
@@ -688,7 +689,7 @@ function Sidebar({ view, setView, user, onLogout, mobileNavOpen, setMobileNavOpe
             <div className="avatar">{user.nome.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase()}</div>
             <div>
               <div className="sidebar-user-name">{user.nome}</div>
-              <div className="sidebar-user-role">{user.cargo}</div>
+              <div className="sidebar-user-role">{user.cargo}{user.readOnly && <span className="readonly-badge">Somente leitura</span>}</div>
             </div>
           </div>
           <button className="nav-item logout-item" onClick={onLogout}>
@@ -961,7 +962,7 @@ function PeriodBar({ anos, selectedYear, selectedMonth, setSelectedYear, setSele
 
 /* ============================== DRE ============================== */
 
-function DREView({ entries, cnpjSel, empresas, persistEntries, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth }) {
+function DREView({ entries, cnpjSel, empresas, persistEntries, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, readOnly }) {
   const anos = anosDisponiveis(entries);
   const [modo, setModo] = useState("mensal");
   return (
@@ -973,8 +974,10 @@ function DREView({ entries, cnpjSel, empresas, persistEntries, selectedYear, sel
           <button className={modo === "anual" ? "toggle-active" : ""} onClick={() => setModo("anual")}>Anual</button>
         </div>
       </div>
-      <ImportarPlanoContas empresas={empresas} entries={entries} persistEntries={persistEntries}
-        selectedYear={selectedYear} selectedMonth={selectedMonth} />
+      {!readOnly && (
+        <ImportarPlanoContas empresas={empresas} entries={entries} persistEntries={persistEntries}
+          selectedYear={selectedYear} selectedMonth={selectedMonth} />
+      )}
       <PeriodBar anos={anos} selectedYear={selectedYear} selectedMonth={selectedMonth}
         setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} showMonth={modo === "mensal"} />
       {modo === "mensal" ? (
@@ -1055,7 +1058,7 @@ function DREAnual({ entries, cnpjSel, year }) {
 
 /* ============================== BALANÇO PATRIMONIAL ============================== */
 
-function BalancoView({ balancos, cnpjSel, empresas, selectedYear, setSelectedYear, persistBalancos }) {
+function BalancoView({ balancos, cnpjSel, empresas, selectedYear, setSelectedYear, persistBalancos, readOnly }) {
   const anos = useMemo(() => {
     const set = new Set([
       ...Object.keys(balancos.a || {}).map(Number),
@@ -1095,10 +1098,10 @@ function BalancoView({ balancos, cnpjSel, empresas, selectedYear, setSelectedYea
     <div className="stack">
       <div className="view-header">
         <h2>Balanço Patrimonial</h2>
-        {cnpjSel !== "consolidado" && <button className="btn-primary" onClick={() => openEdit(cnpjSel)}>Editar {empresas[cnpjSel].nome}</button>}
+        {!readOnly && cnpjSel !== "consolidado" && <button className="btn-primary" onClick={() => openEdit(cnpjSel)}>Editar {empresas[cnpjSel].nome}</button>}
       </div>
       <PeriodBar anos={anos} selectedYear={selectedYear} setSelectedYear={setSelectedYear} showMonth={false} />
-      {cnpjSel === "consolidado" && (
+      {!readOnly && cnpjSel === "consolidado" && (
         <div className="toggle-group" style={{ marginBottom: 4 }}>
           <button className="toggle-active" style={{cursor:"default"}}>Editar dados individuais:</button>
           <button onClick={() => openEdit("a")}>{empresas.a.nome}</button>
@@ -1413,7 +1416,7 @@ function FluxoAnual({ entries, cnpjSel, anos }) {
 
 /* ============================== LANÇAMENTOS ============================== */
 
-function LancamentosView({ entries, empresas, persistEntries }) {
+function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
   const [cnpj, setCnpj] = useState("a");
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
   const [categoriaId, setCategoriaId] = useState(CATEGORIAS[0].id);
@@ -1452,7 +1455,16 @@ function LancamentosView({ entries, empresas, persistEntries }) {
   return (
     <div className="stack">
       <h2 className="view-title-only">Lançamentos</h2>
-      <ImportarExcel empresas={empresas} onImport={importarEmLote} />
+      {readOnly && (
+        <div className="panel pendencias-panel">
+          <div className="import-text" style={{ margin: 0 }}>
+            Você está em modo <strong>somente leitura</strong>: pode ver todos os lançamentos,
+            mas não pode adicionar, importar, apagar ou marcar pagamentos.
+          </div>
+        </div>
+      )}
+      {!readOnly && <ImportarExcel empresas={empresas} onImport={importarEmLote} />}
+      {!readOnly && (
       <div className="panel">
         <div className="panel-title">Novo lançamento</div>
         <form className="entry-form" onSubmit={addEntry}>
@@ -1502,6 +1514,7 @@ function LancamentosView({ entries, empresas, persistEntries }) {
           no Fluxo de Caixa quando você marcá-lo como pago/recebido depois.
         </div>
       </div>
+      )}
       <div className="panel">
         <div className="panel-title-row">
           <div className="panel-title">Últimos lançamentos</div>
@@ -1520,7 +1533,7 @@ function LancamentosView({ entries, empresas, persistEntries }) {
         </div>
         <div className="table-scroll">
           <table className="ledger-table">
-            <thead><tr><th>Data Competência</th><th>Data Caixa</th><th>Empresa</th><th>Categoria</th><th>Descrição</th><th className="num-cell">Valor</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Data Competência</th><th>Data Caixa</th><th>Empresa</th><th>Categoria</th><th>Descrição</th><th className="num-cell">Valor</th><th>Status</th>{!readOnly && <th></th>}</tr></thead>
             <tbody>
               {listados.map((e) => {
                 const c = catInfo(e.categoriaId);
@@ -1538,14 +1551,16 @@ function LancamentosView({ entries, empresas, persistEntries }) {
                         ? <span className="status-badge status-pago">Pago/Recebido</span>
                         : <span className="status-badge status-pendente">Pendente</span>}
                     </td>
-                    <td style={{ display: "flex", gap: 4 }}>
-                      {st === "pendente" && (
-                        <button className="icon-btn" title="Marcar como pago/recebido" onClick={() => setMarcandoPago(e)}>
-                          <Check size={14} />
-                        </button>
-                      )}
-                      <button className="icon-btn" onClick={() => removeEntry(e.id)}><Trash2 size={14} /></button>
-                    </td>
+                    {!readOnly && (
+                      <td style={{ display: "flex", gap: 4 }}>
+                        {st === "pendente" && (
+                          <button className="icon-btn" title="Marcar como pago/recebido" onClick={() => setMarcandoPago(e)}>
+                            <Check size={14} />
+                          </button>
+                        )}
+                        <button className="icon-btn" onClick={() => removeEntry(e.id)}><Trash2 size={14} /></button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -1555,7 +1570,7 @@ function LancamentosView({ entries, empresas, persistEntries }) {
         </div>
       </div>
 
-      {marcandoPago && (
+      {!readOnly && marcandoPago && (
         <MarcarPagoModal
           entry={marcandoPago}
           onCancel={() => setMarcandoPago(null)}
@@ -1891,7 +1906,7 @@ function FileSpreadsheetIcon() {
 
 /* ============================== CONFIGURAÇÕES ============================== */
 
-function ConfiguracoesView({ empresas, persistEmpresas, user }) {
+function ConfiguracoesView({ empresas, persistEmpresas, user, readOnly }) {
   const [form, setForm] = useState(empresas);
   const [saved, setSaved] = useState(false);
   const save = async () => { await persistEmpresas(form); setSaved(true); setTimeout(() => setSaved(false), 1800); };
@@ -1907,23 +1922,23 @@ function ConfiguracoesView({ empresas, persistEmpresas, user }) {
             <div className="config-fields">
               <div>
                 <label className="field-label">Razão social / Nome</label>
-                <input value={form[k].nome} onChange={(e) => setForm({ ...form, [k]: { ...form[k], nome: e.target.value } })} />
+                <input value={form[k].nome} disabled={readOnly} onChange={(e) => setForm({ ...form, [k]: { ...form[k], nome: e.target.value } })} />
               </div>
               <div>
                 <label className="field-label">CNPJ</label>
-                <input value={form[k].cnpj} onChange={(e) => setForm({ ...form, [k]: { ...form[k], cnpj: e.target.value } })} placeholder="00.000.000/0001-00" />
+                <input value={form[k].cnpj} disabled={readOnly} onChange={(e) => setForm({ ...form, [k]: { ...form[k], cnpj: e.target.value } })} placeholder="00.000.000/0001-00" />
               </div>
             </div>
           </div>
         ))}
-        <button className="btn-primary" onClick={save}>{saved ? <><Check size={14} /> Salvo</> : "Salvar Empresas"}</button>
+        {!readOnly && <button className="btn-primary" onClick={save}>{saved ? <><Check size={14} /> Salvo</> : "Salvar Empresas"}</button>}
       </div>
       <div className="panel">
         <div className="panel-title">Sua conta</div>
         <div className="empty-note" style={{ fontStyle: "normal", textAlign: "left" }}>
-          Logado como <strong>{user.email}</strong>. Os 4 usuários do sistema são gerenciados no
-          painel do Supabase (Authentication → Users) — é lá que você cria, remove ou redefine
-          senhas de acesso.
+          Logado como <strong>{user.email}</strong>{readOnly ? " (acesso somente leitura)" : ""}. Os
+          usuários do sistema são gerenciados no painel do Supabase (Authentication → Users) — é
+          lá que você cria, remove ou redefine senhas e permissões de acesso.
         </div>
       </div>
     </div>
@@ -1955,6 +1970,7 @@ html, body, #root { height: 100%; margin: 0; }
 .avatar { width:30px; height:30px; border-radius:50%; background:var(--gold); color:#1a1a1a; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; }
 .sidebar-user-name { font-size:12.5px; font-weight:600; }
 .sidebar-user-role { font-size:10.5px; color:#A9B8A6; }
+.readonly-badge { display:inline-block; margin-left:6px; padding:1px 7px; border-radius:999px; background:#B8863B; color:#1a1a1a; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; }
 .logout-item { color:#E8B4AC; }
 .sidebar-backdrop { display:none; }
 .main-area { flex:1; display:flex; flex-direction:column; min-width:0; }
@@ -2011,6 +2027,7 @@ html, body, #root { height: 100%; margin: 0; }
 .field-label { display:block; font-size:11px; color:var(--ink-soft); margin-bottom:4px; font-weight:500; }
 input, select { font-family:'Inter',sans-serif; font-size:13px; padding:8px 10px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--ink); width:100%; }
 input:focus, select:focus { outline:2px solid var(--teal); outline-offset:1px; border-color:var(--teal); }
+input:disabled { background:#EDEEE8; color:var(--ink-soft); cursor:not-allowed; }
 .btn-primary { display:inline-flex; align-items:center; gap:6px; background:var(--ink); color:#fff; border:none; padding:9px 16px; border-radius:7px; font-size:13px; font-weight:600; cursor:pointer; }
 .btn-primary:hover { background:var(--teal); }
 .btn-primary:disabled { opacity:.6; cursor:default; }

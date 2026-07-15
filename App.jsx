@@ -22,6 +22,8 @@ const CATEGORIAS = [
   { id: "venda_oculos_sol", label: "Venda de Óculos de Sol", grupo: "receitaBruta", tipo: "entrada", dre: true },
   { id: "venda_lentes_contato", label: "Venda de Lentes de Contato", grupo: "receitaBruta", tipo: "entrada", dre: true },
   { id: "venda_acessorios", label: "Venda de Acessórios", grupo: "receitaBruta", tipo: "entrada", dre: true },
+  { id: "venda_joias", label: "Venda de Joias", grupo: "receitaBruta", tipo: "entrada", dre: true },
+  { id: "venda_relogios", label: "Venda de Relógios", grupo: "receitaBruta", tipo: "entrada", dre: true },
 
   // Deduções da Receita Bruta
   { id: "impostos_vendas", label: "DAS - Simples Nacional", grupo: "deducoes", tipo: "saida", dre: true },
@@ -32,6 +34,8 @@ const CATEGORIAS = [
   { id: "custo_armacoes", label: "Custo de Armações", grupo: "cmv", tipo: "saida", dre: true },
   { id: "custo_lentes_lab", label: "Custo de Lentes (Laboratório Terceiro)", grupo: "cmv", tipo: "saida", dre: true },
   { id: "custo_outros_produtos", label: "Custo de Outros Produtos (óculos de sol, lentes de contato, acessórios)", grupo: "cmv", tipo: "saida", dre: true },
+  { id: "custo_joias", label: "Custo de Joias", grupo: "cmv", tipo: "saida", dre: true },
+  { id: "custo_relogios", label: "Custo de Relógios", grupo: "cmv", tipo: "saida", dre: true },
 
   // Despesas com Vendas
   { id: "comerciais", label: "Despesas Comerciais/Marketing (Outras)", grupo: "opVendas", tipo: "saida", dre: true },
@@ -50,6 +54,7 @@ const CATEGORIAS = [
   { id: "agua_luz_internet", label: "Água, Luz e Internet", grupo: "opAdmin", tipo: "saida", dre: true },
   { id: "sistema_gestao", label: "Sistema de Gestão", grupo: "opAdmin", tipo: "saida", dre: true },
   { id: "material_expediente", label: "Material de Expediente", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "honorarios_contabeis", label: "Honorários Contábeis", grupo: "opAdmin", tipo: "saida", dre: true },
 
   // Resultado Financeiro
   { id: "receitas_financeiras", label: "Receitas Financeiras (Outras)", grupo: "recFin", tipo: "entrada", dre: true },
@@ -136,9 +141,13 @@ function normalizeStr(s) {
 function findCategoriaByLabel(raw) {
   const alvo = normalizeStr(raw);
   if (!alvo) return null;
-  return CATEGORIAS.find((c) => normalizeStr(c.label) === alvo) ||
-    CATEGORIAS.find((c) => normalizeStr(c.label).includes(alvo) || alvo.includes(normalizeStr(c.label))) ||
-    null;
+  const direta = CATEGORIAS.find((c) => normalizeStr(c.label) === alvo) ||
+    CATEGORIAS.find((c) => normalizeStr(c.label).includes(alvo) || alvo.includes(normalizeStr(c.label)));
+  if (direta) return direta;
+  // Se não bateu com nenhum nome de categoria exato, tenta pelo classificador
+  // inteligente por palavras-chave (o mesmo usado no Plano de Contas)
+  const viaClassificador = classificarConta(raw);
+  return viaClassificador ? CATEGORIAS.find((c) => c.id === viaClassificador) || null : null;
 }
 
 function excelSerialToDate(serial) {
@@ -178,8 +187,12 @@ function parseValorCell(v) {
 
 function parseEmpresaCell(v, empresas) {
   const alvo = normalizeStr(v);
-  if (alvo === "a" || alvo === normalizeStr(empresas.a.nome)) return "a";
-  if (alvo === "b" || alvo === normalizeStr(empresas.b.nome)) return "b";
+  if (!alvo) return null;
+  const nomeA = normalizeStr(empresas.a.nome), nomeB = normalizeStr(empresas.b.nome);
+  if (alvo === "a" || alvo === nomeA) return "a";
+  if (alvo === "b" || alvo === nomeB) return "b";
+  if (nomeA && (alvo.includes(nomeA) || nomeA.includes(alvo))) return "a";
+  if (nomeB && (alvo.includes(nomeB) || nomeB.includes(alvo))) return "b";
   return null;
 }
 
@@ -233,22 +246,65 @@ function baixarModeloExcel(empresas) {
   XLSX.writeFile(wb, "modelo-lancamentos.xlsx");
 }
 
+// Grupos de "apelidos" de coluna usados tanto para achar o cabeçalho quanto para
+// mapear campo -> índice de coluna quando o arquivo tem cabeçalho.
+const ALIASES_CAMPOS = {
+  dataCompetencia: ["data de competência", "data competencia", "competência", "data emissão", "data de emissão", "data movimento"],
+  dataCaixa: ["data de pagamento/recebimento", "data pagamento", "data recebimento", "data de pagamento", "data de recebimento", "data"],
+  empresa: ["empresa", "cnpj", "loja", "filial"],
+  categoria: ["categoria", "conta", "plano de contas"],
+  valor: ["valor", "valor (r$)", "valor total", "montante"],
+  status: ["status", "situação"],
+  descricao: ["descrição", "descricao", "obs", "observação", "histórico", "lançamento"],
+};
+
+function detectarCabecalho(row) {
+  const mapa = {};
+  let acertos = 0;
+  row.forEach((cel, idx) => {
+    const alvo = normalizeStr(cel);
+    if (!alvo) return;
+    for (const [campo, apelidos] of Object.entries(ALIASES_CAMPOS)) {
+      if (apelidos.includes(alvo) && mapa[campo] === undefined) {
+        mapa[campo] = idx;
+        acertos++;
+      }
+    }
+  });
+  // considera cabeçalho só se reconheceu pelo menos 3 dos campos essenciais
+  const essenciais = ["empresa", "categoria", "valor"].filter((c) => mapa[c] !== undefined).length;
+  return essenciais >= 3 ? mapa : null;
+}
+
 function parseLancamentosExcel(arrayBuffer, empresas) {
   const wb = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
   const sheet = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  const linhasBrutas = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
+  if (linhasBrutas.length === 0) return { validos: [], erros: [] };
+
+  const mapaCabecalho = detectarCabecalho(linhasBrutas[0]);
+  // Com cabeçalho: pula a 1ª linha e usa as posições encontradas nela.
+  // Sem cabeçalho (arquivo "cru" tipo extrato/relatório direto): assume a ordem
+  // Data, Empresa, Categoria, Valor, Descrição (posições 0,1,2,3,4).
+  const mapa = mapaCabecalho || { dataCaixa: 0, empresa: 1, categoria: 2, valor: 3, descricao: 4 };
+  const linhasDados = mapaCabecalho ? linhasBrutas.slice(1) : linhasBrutas;
+  const offsetLinha = mapaCabecalho ? 2 : 1;
+
   const validos = [];
   const erros = [];
-  rows.forEach((row, idx) => {
-    const linhaNum = idx + 2; // +2 = considerando cabeçalho na linha 1
-    const dataCompetenciaRaw = getCell(row, "Data de Competência", "Data Competencia", "Competência", "Data Emissão", "Data de Emissão", "Data Movimento");
-    // aceita também planilhas antigas com uma coluna única "Data" (tratada como data de pagamento)
-    const dataCaixaRaw = getCell(row, "Data de Pagamento/Recebimento", "Data Pagamento", "Data Recebimento", "Data de Pagamento", "Data de Recebimento", "Data") || dataCompetenciaRaw;
-    const empresaRaw = getCell(row, "Empresa", "CNPJ", "Loja", "Filial");
-    const categoriaRaw = getCell(row, "Categoria", "Conta", "Plano de Contas");
-    const valorRaw = getCell(row, "Valor", "Valor (R$)", "Valor Total", "Montante");
-    const statusRaw = getCell(row, "Status", "Situação");
-    const descricaoRaw = getCell(row, "Descrição", "Descricao", "Obs", "Observação", "Histórico", "Lançamento");
+  linhasDados.forEach((row, idx) => {
+    const linhaNum = idx + offsetLinha;
+    const get = (campo) => (mapa[campo] !== undefined ? row[mapa[campo]] : undefined);
+
+    const dataCompetenciaRaw = get("dataCompetencia");
+    const dataCaixaRaw = get("dataCaixa") || dataCompetenciaRaw;
+    const empresaRaw = get("empresa");
+    const categoriaRaw = get("categoria");
+    const valorRaw = get("valor");
+    const statusRaw = get("status");
+    let descricaoRaw = get("descricao");
+    // evita usar a descrição quando ela só repete o nome da categoria (comum em exports diretos)
+    if (descricaoRaw && categoriaRaw && normalizeStr(descricaoRaw) === normalizeStr(categoriaRaw)) descricaoRaw = "";
 
     if (!dataCaixaRaw && !dataCompetenciaRaw && !empresaRaw && !categoriaRaw && !valorRaw) return; // linha em branco
 
@@ -262,7 +318,7 @@ function parseLancamentosExcel(arrayBuffer, empresas) {
     const problemas = [];
     if (!dataCompetencia) problemas.push("data de competência inválida");
     if (status === "liquidado" && !dataCaixa) problemas.push("data de pagamento/recebimento inválida");
-    if (!cnpj) problemas.push("empresa não reconhecida (use A ou B)");
+    if (!cnpj) problemas.push(`empresa não reconhecida ("${empresaRaw}") — confira o nome cadastrado em Configurações`);
     if (!categoria) problemas.push(`categoria não reconhecida ("${categoriaRaw}")`);
     if (valor === null || valor <= 0) problemas.push("valor inválido");
 
@@ -288,33 +344,79 @@ function parseLancamentosExcel(arrayBuffer, empresas) {
    mas sempre mostra uma prévia para o usuário revisar/corrigir antes de confirmar. */
 
 const REGRAS_CLASSIFICACAO = [
+  // Financiamento / patrimônio (NÃO entram na DRE)
+  [/aporte/, "aporte_socios"],
+  [/bens de pequeno valor|bem de pequeno valor|ativo imobilizado|^imobilizado/, "investimento"],
+  [/distribui[cç][aã]o.*lucro/, "distribuicao_lucros"],
+  [/s[oó]cio/, "pro_labore"],
+
+  // Taxas de cartão / bancárias (checadas antes das regras genéricas de aluguel/convênio)
+  [/aluguel.*maquin|maquin.*aluguel|reten[cç][aã]o.*cart[aã]o|taxa.*convenio/, "taxas_cartao"],
+  [/\biof\b|manuten[cç][aã]o.*conta|taxa.*pix|\bpix\b/, "tarifas_bancarias"],
+
+  // Folha de pagamento e encargos
   [/pro.?labor/, "pro_labore"],
-  [/fgts|inss/, "fgts_inss"],
+  [/fgts/, "fgts_inss"],
+  [/\binss\b/, "fgts_inss"],
+  [/13.*sal[aá]rio|d[eé]cimo terceiro/, "salarios_equipe"],
+  [/f[ée]rias/, "salarios_equipe"],
+  [/rescis|multa recisoria|multa rescis/, "salarios_equipe"],
+  [/plano.*sa[uú]de/, "salarios_equipe"],
+  [/conv[eê]nio/, "salarios_equipe"],
+  [/servi[cç]o extra/, "salarios_equipe"],
+  [/sindicato/, "salarios_equipe"],
+  [/vale.*(alimenta|refei[cç]|transport)/, "salarios_equipe"],
+  [/sal[aá]rio maternidade/, "salarios_equipe"],
+  [/pr[eê]mio/, "comissoes_vendedores"],
+  [/exame/, "administrativas"],
+  [/uniforme/, "administrativas"],
   [/sal[aá]rio/, "salarios_equipe"],
-  [/aluguel/, "aluguel_loja"],
-  [/(agua|[aá]gua|luz|energia|internet|telefone)/, "agua_luz_internet"],
+
+  // Estrutura / utilidades
+  [/predial/, "administrativas"],
+  [/aluguel|condom[ií]nio/, "aluguel_loja"],
+  [/(^|\s)[aá]gua(\s|$)|luz|energia|internet|telefone/, "agua_luz_internet"],
+  [/contabilidade|honor[aá]rio.*cont[aá]bil/, "honorarios_contabeis"],
   [/sistema.*gest|software/, "sistema_gestao"],
-  [/material.*expediente|papelaria/, "material_expediente"],
+  [/mat\.?\s*escrit[oó]rio|material.*(expediente|escrit[oó]rio)|papelaria/, "material_expediente"],
+
+  // Vendas / comercial
   [/comiss/, "comissoes_vendedores"],
   [/(maquineta|maquin|taxa.*cart[aã]o|adquirente)/, "taxas_cartao"],
   [/embalag/, "embalagens"],
-  [/(marketing|propaganda|an[uú]ncio|publicidade)/, "marketing_anuncios"],
+  [/evento|(marketing|propaganda|an[uú]ncio|publicidade)/, "marketing_anuncios"],
+
+  // Financeiro
   [/juros/, "juros_boletos_atraso"],
   [/tarifa.*banc/, "tarifas_bancarias"],
-  [/desconto.*fornecedor/, "descontos_fornecedores"],
+  [/desconto.*fornecedor|cr[eé]dito.*fornecedor/, "descontos_fornecedores"],
   [/rendimento.*aplica|receita financeira/, "rendimentos_aplicacao"],
-  [/(^| )das( |$)|simples nacional/, "impostos_vendas"],
-  [/devolu[cç][aã]o|cancelamento/, "devolucoes_cancelamentos"],
-  [/(custo|cmv).*len[st]e/, "custo_lentes_lab"],
-  [/(custo|cmv).*arma[cç]/, "custo_armacoes"],
-  [/custo|cmv|mercadoria vendida/, "custo_outros_produtos"],
-  [/(venda|receita).*[oó]culos de grau|oculos de grau/, "venda_oculos_grau"],
-  [/(venda|receita).*len[st]e.*contato|lente de contato/, "venda_lentes_contato"],
-  [/(venda|receita).*[oó]culos de sol|oculos de sol/, "venda_oculos_sol"],
-  [/(venda|receita).*len[st]e/, "venda_lentes"],
-  [/(venda|receita).*arma[cç]/, "venda_armacoes"],
-  [/(venda|receita).*acess[oó]rio/, "venda_acessorios"],
-  [/venda|receita de vendas|faturamento/, "receita_vendas"],
+  [/\bicms\b|(^| )das( |$)|simples nacional/, "impostos_vendas"],
+  [/devolu[cç][aã]o|cancelamento|cr[eé]dito.*(dep[oó]sito|cliente)/, "devolucoes_cancelamentos"],
+
+  // Custo (CMV) — compras, insumos e consertos
+  [/conserto.*joia/, "custo_joias"],
+  [/conserto.*[oó]culos/, "custo_outros_produtos"],
+  [/insumos.*lab|laborat[oó]rio/, "custo_lentes_lab"],
+  [/compras.*len[st]e|(custo|cmv).*len[st]e/, "custo_lentes_lab"],
+  [/compras.*(arma[cç]|solar)|(custo|cmv).*arma[cç]/, "custo_armacoes"],
+  [/compras.*joia|(custo|cmv).*joia/, "custo_joias"],
+  [/compras.*rel[oó]gio|(custo|cmv).*rel[oó]gio/, "custo_relogios"],
+  [/acess[oó]rio|consulta|optometra|fornitura|compras|(custo|cmv)|mercadoria vendida/, "custo_outros_produtos"],
+
+  // Receita — vendas
+  [/[oó]culos de grau/, "venda_oculos_grau"],
+  [/lente de contato/, "venda_lentes_contato"],
+  [/[oó]culos de sol/, "venda_oculos_sol"],
+  [/\bjoia/, "venda_joias"],
+  [/rel[oó]gio/, "venda_relogios"],
+  [/\blente/, "venda_lentes"],
+  [/arma[cç][aã]o/, "venda_armacoes"],
+  [/acess[oó]rio/, "venda_acessorios"],
+  [/venda|receita de vendas|faturamento|^caixa$|rec cart[aã]o|cart[aã]o|pedido|ordem de servi[cç]o/, "receita_vendas"],
+
+  // Genéricos (última linha de defesa antes do fallback por sinal)
+  [/curso|treinamento|higieniza|decora[cç][aã]o|supermercado|terceiro/, "administrativas"],
   [/despesa.*administrativ|administrativ/, "administrativas"],
   [/despesa.*financeira|financeira/, "despesas_financeiras"],
   [/despesa.*comercial|comercial/, "comerciais"],
@@ -325,29 +427,61 @@ function classificarConta(nomeConta) {
   for (const [regex, categoriaId] of REGRAS_CLASSIFICACAO) {
     if (regex.test(alvo)) return categoriaId;
   }
-  return null; // não identificado — usuário precisa escolher manualmente
+  return null; // não identificado — usa um valor padrão (marcado para revisão)
 }
 
-function parsePlanoContasExcel(arrayBuffer) {
+// Linhas de estrutura do relatório que nunca são lançamentos de verdade
+const LINHAS_IGNORAR = /^impresso em|^p[aá]gina \d|^filtro:|^total:?$|^acumulado$|^contas a (pagar|receber)$|^an[aá]lise do plano de contas/i;
+
+function parsePlanoContasExcel(arrayBuffer, mesSelecionado) {
   const wb = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
   const sheet = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
+
+  let colunaDoMes = null; // índice da coluna que corresponde ao mês escolhido
+  let anoDetectado = null;
   const linhas = [];
-  rows.forEach((row, idx) => {
-    const contaRaw = getCell(row, "Conta", "Descrição da Conta", "Descrição", "Histórico", "Nome da Conta", "Lançamento", "Título da Conta", "Classificação");
-    const valorRaw = getCell(row, "Valor", "Saldo", "Movimento", "Total", "Saldo Atual", "Valor (R$)", "Saldo do Período", "Valor Acumulado");
-    if (!contaRaw || valorRaw === "" || valorRaw === undefined) return;
-    const valor = Math.abs(parseValorCell(valorRaw) || 0);
-    if (!valor) return;
-    const categoriaSugerida = classificarConta(contaRaw);
-    linhas.push({
-      linhaId: idx,
-      conta: String(contaRaw).trim(),
-      valor,
-      categoriaId: categoriaSugerida, // pode ser null (não identificado)
-    });
+  let linhaId = 0;
+
+  rows.forEach((row) => {
+    // Detecta linha de cabeçalho com nomes de mês (repete várias vezes no relatório)
+    const mesesEncontrados = row.reduce((acc, cel, idx) => {
+      const i = MESES_LONGOS.findIndex((m) => normalizeStr(m) === normalizeStr(cel));
+      if (i !== -1) acc[i + 1] = idx;
+      return acc;
+    }, {});
+    if (Object.keys(mesesEncontrados).length >= 6) {
+      colunaDoMes = mesesEncontrados[mesSelecionado] ?? null;
+      const possivelAno = row.find((c) => typeof c === "number" && c >= 2000 && c <= 2100);
+      if (possivelAno) anoDetectado = possivelAno;
+      return; // linha de cabeçalho, não é lançamento
+    }
+    if (colunaDoMes === null) return; // ainda não achamos nenhum cabeçalho de mês
+
+    const contaRaw = row[0];
+    const conta = String(contaRaw ?? "").trim();
+    if (!conta || LINHAS_IGNORAR.test(conta) || /^\d{4}$/.test(conta)) return;
+
+    const valorCel = row[colunaDoMes];
+    const valorNum = typeof valorCel === "number" ? valorCel : parseValorCell(valorCel);
+    if (!valorNum) return; // 0 ou vazio = sem movimento naquele mês
+
+    let categoriaId = classificarConta(conta);
+    let confiante = !!categoriaId;
+    if (!categoriaId) {
+      categoriaId = valorNum >= 0 ? "receita_vendas" : "outras_saidas";
+    } else {
+      // se o sinal do valor não bate com o tipo esperado da categoria (ex: um "crédito"
+      // com valor positivo caindo numa categoria de saída), marca para revisão manual
+      const categoriaInfo = CATEGORIAS.find((c) => c.id === categoriaId);
+      const tipoEsperado = valorNum >= 0 ? "entrada" : "saida";
+      if (categoriaInfo && categoriaInfo.tipo !== tipoEsperado) confiante = false;
+    }
+
+    linhas.push({ linhaId: linhaId++, conta, valor: Math.abs(valorNum), categoriaId, confiante });
   });
-  return linhas;
+
+  return { linhas, anoDetectado };
 }
 
 
@@ -417,6 +551,7 @@ export default function App() {
     nome: session.user.user_metadata?.nome || session.user.email,
     cargo: session.user.user_metadata?.cargo || "Usuário",
     email: session.user.email,
+    readOnly: session.user.user_metadata?.acesso === "leitura",
   };
 
   return (
@@ -440,12 +575,12 @@ export default function App() {
             {view === "dre" && (
               <DREView entries={entries} cnpjSel={cnpjSel} empresas={empresas} persistEntries={persistEntries}
                 selectedYear={selectedYear} selectedMonth={selectedMonth}
-                setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} />
+                setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} readOnly={user.readOnly} />
             )}
             {view === "balanco" && (
               <BalancoView balancos={balancos} cnpjSel={cnpjSel} empresas={empresas}
                 selectedYear={selectedYear} setSelectedYear={setSelectedYear}
-                persistBalancos={persistBalancos} />
+                persistBalancos={persistBalancos} readOnly={user.readOnly} />
             )}
             {view === "fluxo" && (
               <FluxoCaixaView entries={entries} cnpjSel={cnpjSel}
@@ -453,10 +588,10 @@ export default function App() {
                 setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} />
             )}
             {view === "lancamentos" && (
-              <LancamentosView entries={entries} empresas={empresas} persistEntries={persistEntries} />
+              <LancamentosView entries={entries} empresas={empresas} persistEntries={persistEntries} readOnly={user.readOnly} />
             )}
             {view === "config" && (
-              <ConfiguracoesView empresas={empresas} persistEmpresas={persistEmpresas} user={user} />
+              <ConfiguracoesView empresas={empresas} persistEmpresas={persistEmpresas} user={user} readOnly={user.readOnly} />
             )}
           </div>
         )}
@@ -554,7 +689,7 @@ function Sidebar({ view, setView, user, onLogout, mobileNavOpen, setMobileNavOpe
             <div className="avatar">{user.nome.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase()}</div>
             <div>
               <div className="sidebar-user-name">{user.nome}</div>
-              <div className="sidebar-user-role">{user.cargo}</div>
+              <div className="sidebar-user-role">{user.cargo}{user.readOnly && <span className="readonly-badge">Somente leitura</span>}</div>
             </div>
           </div>
           <button className="nav-item logout-item" onClick={onLogout}>
@@ -827,7 +962,7 @@ function PeriodBar({ anos, selectedYear, selectedMonth, setSelectedYear, setSele
 
 /* ============================== DRE ============================== */
 
-function DREView({ entries, cnpjSel, empresas, persistEntries, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth }) {
+function DREView({ entries, cnpjSel, empresas, persistEntries, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth, readOnly }) {
   const anos = anosDisponiveis(entries);
   const [modo, setModo] = useState("mensal");
   return (
@@ -839,8 +974,10 @@ function DREView({ entries, cnpjSel, empresas, persistEntries, selectedYear, sel
           <button className={modo === "anual" ? "toggle-active" : ""} onClick={() => setModo("anual")}>Anual</button>
         </div>
       </div>
-      <ImportarPlanoContas empresas={empresas} entries={entries} persistEntries={persistEntries}
-        selectedYear={selectedYear} selectedMonth={selectedMonth} />
+      {!readOnly && (
+        <ImportarPlanoContas empresas={empresas} entries={entries} persistEntries={persistEntries}
+          selectedYear={selectedYear} selectedMonth={selectedMonth} />
+      )}
       <PeriodBar anos={anos} selectedYear={selectedYear} selectedMonth={selectedMonth}
         setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} showMonth={modo === "mensal"} />
       {modo === "mensal" ? (
@@ -921,7 +1058,7 @@ function DREAnual({ entries, cnpjSel, year }) {
 
 /* ============================== BALANÇO PATRIMONIAL ============================== */
 
-function BalancoView({ balancos, cnpjSel, empresas, selectedYear, setSelectedYear, persistBalancos }) {
+function BalancoView({ balancos, cnpjSel, empresas, selectedYear, setSelectedYear, persistBalancos, readOnly }) {
   const anos = useMemo(() => {
     const set = new Set([
       ...Object.keys(balancos.a || {}).map(Number),
@@ -961,10 +1098,10 @@ function BalancoView({ balancos, cnpjSel, empresas, selectedYear, setSelectedYea
     <div className="stack">
       <div className="view-header">
         <h2>Balanço Patrimonial</h2>
-        {cnpjSel !== "consolidado" && <button className="btn-primary" onClick={() => openEdit(cnpjSel)}>Editar {empresas[cnpjSel].nome}</button>}
+        {!readOnly && cnpjSel !== "consolidado" && <button className="btn-primary" onClick={() => openEdit(cnpjSel)}>Editar {empresas[cnpjSel].nome}</button>}
       </div>
       <PeriodBar anos={anos} selectedYear={selectedYear} setSelectedYear={setSelectedYear} showMonth={false} />
-      {cnpjSel === "consolidado" && (
+      {!readOnly && cnpjSel === "consolidado" && (
         <div className="toggle-group" style={{ marginBottom: 4 }}>
           <button className="toggle-active" style={{cursor:"default"}}>Editar dados individuais:</button>
           <button onClick={() => openEdit("a")}>{empresas.a.nome}</button>
@@ -1279,7 +1416,7 @@ function FluxoAnual({ entries, cnpjSel, anos }) {
 
 /* ============================== LANÇAMENTOS ============================== */
 
-function LancamentosView({ entries, empresas, persistEntries }) {
+function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
   const [cnpj, setCnpj] = useState("a");
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
   const [categoriaId, setCategoriaId] = useState(CATEGORIAS[0].id);
@@ -1318,7 +1455,16 @@ function LancamentosView({ entries, empresas, persistEntries }) {
   return (
     <div className="stack">
       <h2 className="view-title-only">Lançamentos</h2>
-      <ImportarExcel empresas={empresas} onImport={importarEmLote} />
+      {readOnly && (
+        <div className="panel pendencias-panel">
+          <div className="import-text" style={{ margin: 0 }}>
+            Você está em modo <strong>somente leitura</strong>: pode ver todos os lançamentos,
+            mas não pode adicionar, importar, apagar ou marcar pagamentos.
+          </div>
+        </div>
+      )}
+      {!readOnly && <ImportarExcel empresas={empresas} onImport={importarEmLote} />}
+      {!readOnly && (
       <div className="panel">
         <div className="panel-title">Novo lançamento</div>
         <form className="entry-form" onSubmit={addEntry}>
@@ -1368,6 +1514,7 @@ function LancamentosView({ entries, empresas, persistEntries }) {
           no Fluxo de Caixa quando você marcá-lo como pago/recebido depois.
         </div>
       </div>
+      )}
       <div className="panel">
         <div className="panel-title-row">
           <div className="panel-title">Últimos lançamentos</div>
@@ -1386,7 +1533,7 @@ function LancamentosView({ entries, empresas, persistEntries }) {
         </div>
         <div className="table-scroll">
           <table className="ledger-table">
-            <thead><tr><th>Data Competência</th><th>Data Caixa</th><th>Empresa</th><th>Categoria</th><th>Descrição</th><th className="num-cell">Valor</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Data Competência</th><th>Data Caixa</th><th>Empresa</th><th>Categoria</th><th>Descrição</th><th className="num-cell">Valor</th><th>Status</th>{!readOnly && <th></th>}</tr></thead>
             <tbody>
               {listados.map((e) => {
                 const c = catInfo(e.categoriaId);
@@ -1404,14 +1551,16 @@ function LancamentosView({ entries, empresas, persistEntries }) {
                         ? <span className="status-badge status-pago">Pago/Recebido</span>
                         : <span className="status-badge status-pendente">Pendente</span>}
                     </td>
-                    <td style={{ display: "flex", gap: 4 }}>
-                      {st === "pendente" && (
-                        <button className="icon-btn" title="Marcar como pago/recebido" onClick={() => setMarcandoPago(e)}>
-                          <Check size={14} />
-                        </button>
-                      )}
-                      <button className="icon-btn" onClick={() => removeEntry(e.id)}><Trash2 size={14} /></button>
-                    </td>
+                    {!readOnly && (
+                      <td style={{ display: "flex", gap: 4 }}>
+                        {st === "pendente" && (
+                          <button className="icon-btn" title="Marcar como pago/recebido" onClick={() => setMarcandoPago(e)}>
+                            <Check size={14} />
+                          </button>
+                        )}
+                        <button className="icon-btn" onClick={() => removeEntry(e.id)}><Trash2 size={14} /></button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -1421,7 +1570,7 @@ function LancamentosView({ entries, empresas, persistEntries }) {
         </div>
       </div>
 
-      {marcandoPago && (
+      {!readOnly && marcandoPago && (
         <MarcarPagoModal
           entry={marcandoPago}
           onCancel={() => setMarcandoPago(null)}
@@ -1462,6 +1611,7 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
   const [ano, setAno] = useState(selectedYear);
   const [mes, setMes] = useState(selectedMonth);
   const [linhas, setLinhas] = useState(null); // preview editável
+  const [anoDetectado, setAnoDetectado] = useState(null);
   const [nomeArquivo, setNomeArquivo] = useState("");
   const [processando, setProcessando] = useState(false);
   const [importando, setImportando] = useState(false);
@@ -1475,12 +1625,14 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
     setConcluido(null);
     try {
       const buffer = await file.arrayBuffer();
-      const contas = parsePlanoContasExcel(buffer);
+      const { linhas: contas, anoDetectado: anoArq } = parsePlanoContasExcel(buffer, mes);
       setLinhas(contas);
+      setAnoDetectado(anoArq);
       setNomeArquivo(file.name);
     } catch (err) {
       console.error(err);
       setLinhas([]);
+      setAnoDetectado(null);
       setNomeArquivo(file.name);
     }
     setProcessando(false);
@@ -1488,17 +1640,18 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
   };
 
   const atualizarCategoria = (linhaId, categoriaId) => {
-    setLinhas((prev) => prev.map((l) => l.linhaId === linhaId ? { ...l, categoriaId } : l));
+    setLinhas((prev) => prev.map((l) => l.linhaId === linhaId ? { ...l, categoriaId, confiante: true } : l));
   };
 
-  const prontasParaImportar = (linhas || []).filter((l) => l.categoriaId);
-  const naoClassificadas = (linhas || []).filter((l) => !l.categoriaId);
+  const todasLinhas = linhas || [];
+  const confiantes = todasLinhas.filter((l) => l.confiante);
+  const paraRevisar = todasLinhas.filter((l) => !l.confiante);
 
   const confirmarImportacao = async () => {
-    if (prontasParaImportar.length === 0) return;
+    if (todasLinhas.length === 0) return;
     setImportando(true);
     const dataCompetencia = `${ano}-${String(mes).padStart(2, "0")}-${String(new Date(ano, mes, 0).getDate()).padStart(2, "0")}`;
-    const novos = prontasParaImportar.map((l, i) => ({
+    const novos = todasLinhas.map((l, i) => ({
       id: Date.now() + i,
       cnpj, data: dataCompetencia, categoriaId: l.categoriaId, valor: l.valor,
       descricao: `Plano de Contas: ${l.conta}`,
@@ -1519,11 +1672,11 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
       {aberto && (
         <div className="import-box">
           <p className="import-text">
-            Suba aqui o relatório exportado do seu sistema contábil (com uma linha por conta e o
-            valor do período). O sistema tenta reconhecer automaticamente cada conta (receita,
-            custo, despesa etc.) e sugerir onde ela entra na DRE — revise a sugestão antes de
-            confirmar, já que a classificação automática pode errar em nomes de conta incomuns.
-            Esses lançamentos entram só na DRE (regime de competência) e não no Fluxo de Caixa.
+            Suba aqui o relatório "Análise do plano de contas (realizado)" exportado do seu
+            sistema contábil. O app localiza a coluna do mês escolhido abaixo e tenta reconhecer
+            automaticamente cada conta (receita, custo, despesa, ou até aporte/empréstimo — que
+            não entram na DRE). Linhas com fundo amarelo são sugestões genéricas: confira antes
+            de confirmar. Esses lançamentos entram só na DRE (competência), não no Fluxo de Caixa.
           </p>
           <div className="import-actions" style={{ alignItems: "flex-end" }}>
             <div>
@@ -1548,6 +1701,10 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
               <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} hidden />
             </label>
           </div>
+          <div className="import-text" style={{ marginTop: -4 }}>
+            Escolha o mês/ano <strong>antes</strong> de selecionar o arquivo — o app lê a coluna
+            correspondente a esse mês dentro do relatório.
+          </div>
 
           {processando && <div className="empty-note">Lendo arquivo…</div>}
           {concluido !== null && (
@@ -1556,28 +1713,40 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
 
           {linhas && (
             <div className="import-preview">
+              {anoDetectado && anoDetectado !== ano && (
+                <div className="balance-check"><AlertCircle size={13} /> Este arquivo parece ser do ano {anoDetectado}, mas você selecionou {ano}. Confira o campo "Ano" acima se não for intencional.</div>
+              )}
               <div className="import-preview-summary">
                 <span><strong>{nomeArquivo}</strong></span>
-                <span className="positive">{prontasParaImportar.length} conta(s) classificada(s)</span>
-                {naoClassificadas.length > 0 && <span className="negative">{naoClassificadas.length} conta(s) sem classificação — escolha manualmente abaixo</span>}
+                <span className="positive">{confiantes.length} conta(s) reconhecida(s) automaticamente</span>
+                {paraRevisar.length > 0 && <span className="negative">{paraRevisar.length} conta(s) com sugestão genérica — revise antes de confirmar</span>}
               </div>
-              {linhas.length === 0 ? (
-                <div className="empty-note">Não encontrei colunas de conta/valor reconhecíveis nesse arquivo.</div>
+              {todasLinhas.length === 0 ? (
+                <div className="empty-note">
+                  Nenhum valor encontrado para {MESES_LONGOS[mes - 1]}/{ano} neste arquivo. Confira se
+                  escolheu o mês certo, ou se o relatório realmente tem movimento nesse período.
+                </div>
               ) : (
                 <div className="table-scroll">
                   <table className="ledger-table">
                     <thead><tr><th>Conta (original)</th><th className="num-cell">Valor</th><th>Classificação na DRE</th></tr></thead>
                     <tbody>
-                      {linhas.map((l) => (
-                        <tr key={l.linhaId} className={!l.categoriaId ? "row-atencao" : ""}>
+                      {todasLinhas.map((l) => (
+                        <tr key={l.linhaId} className={!l.confiante ? "row-atencao" : ""}>
                           <td>{l.conta}</td>
                           <td className="num-cell">{fmtBRL(l.valor)}</td>
                           <td>
-                            <select value={l.categoriaId || ""} onChange={(e) => atualizarCategoria(l.linhaId, e.target.value)}>
-                              <option value="" disabled>Selecionar categoria…</option>
-                              {CATEGORIAS.filter((c) => c.dre).map((c) => (
-                                <option key={c.id} value={c.id}>{c.label} {c.tipo === "entrada" ? "↑" : "↓"}</option>
-                              ))}
+                            <select value={l.categoriaId} onChange={(e) => atualizarCategoria(l.linhaId, e.target.value)}>
+                              <optgroup label="Contas de resultado (entram na DRE)">
+                                {CATEGORIAS.filter((c) => c.dre).map((c) => (
+                                  <option key={c.id} value={c.id}>{c.label} {c.tipo === "entrada" ? "↑" : "↓"}</option>
+                                ))}
+                              </optgroup>
+                              <optgroup label="Fora da DRE (financiamento/patrimônio)">
+                                {CATEGORIAS.filter((c) => !c.dre).map((c) => (
+                                  <option key={c.id} value={c.id}>{c.label} {c.tipo === "entrada" ? "↑" : "↓"}</option>
+                                ))}
+                              </optgroup>
                             </select>
                           </td>
                         </tr>
@@ -1588,8 +1757,8 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
               )}
               <div className="import-confirm-row">
                 <button className="btn-secondary" onClick={() => setLinhas(null)}>Cancelar</button>
-                <button className="btn-primary" disabled={prontasParaImportar.length === 0 || importando} onClick={confirmarImportacao}>
-                  {importando ? "Importando…" : `Confirmar importação de ${prontasParaImportar.length} conta(s) para ${MESES_LONGOS[mes - 1]}/${ano}`}
+                <button className="btn-primary" disabled={todasLinhas.length === 0 || importando} onClick={confirmarImportacao}>
+                  {importando ? "Importando…" : `Confirmar importação de ${todasLinhas.length} conta(s) para ${MESES_LONGOS[mes - 1]}/${ano}`}
                 </button>
               </div>
             </div>
@@ -1737,7 +1906,7 @@ function FileSpreadsheetIcon() {
 
 /* ============================== CONFIGURAÇÕES ============================== */
 
-function ConfiguracoesView({ empresas, persistEmpresas, user }) {
+function ConfiguracoesView({ empresas, persistEmpresas, user, readOnly }) {
   const [form, setForm] = useState(empresas);
   const [saved, setSaved] = useState(false);
   const save = async () => { await persistEmpresas(form); setSaved(true); setTimeout(() => setSaved(false), 1800); };
@@ -1753,23 +1922,23 @@ function ConfiguracoesView({ empresas, persistEmpresas, user }) {
             <div className="config-fields">
               <div>
                 <label className="field-label">Razão social / Nome</label>
-                <input value={form[k].nome} onChange={(e) => setForm({ ...form, [k]: { ...form[k], nome: e.target.value } })} />
+                <input value={form[k].nome} disabled={readOnly} onChange={(e) => setForm({ ...form, [k]: { ...form[k], nome: e.target.value } })} />
               </div>
               <div>
                 <label className="field-label">CNPJ</label>
-                <input value={form[k].cnpj} onChange={(e) => setForm({ ...form, [k]: { ...form[k], cnpj: e.target.value } })} placeholder="00.000.000/0001-00" />
+                <input value={form[k].cnpj} disabled={readOnly} onChange={(e) => setForm({ ...form, [k]: { ...form[k], cnpj: e.target.value } })} placeholder="00.000.000/0001-00" />
               </div>
             </div>
           </div>
         ))}
-        <button className="btn-primary" onClick={save}>{saved ? <><Check size={14} /> Salvo</> : "Salvar Empresas"}</button>
+        {!readOnly && <button className="btn-primary" onClick={save}>{saved ? <><Check size={14} /> Salvo</> : "Salvar Empresas"}</button>}
       </div>
       <div className="panel">
         <div className="panel-title">Sua conta</div>
         <div className="empty-note" style={{ fontStyle: "normal", textAlign: "left" }}>
-          Logado como <strong>{user.email}</strong>. Os 4 usuários do sistema são gerenciados no
-          painel do Supabase (Authentication → Users) — é lá que você cria, remove ou redefine
-          senhas de acesso.
+          Logado como <strong>{user.email}</strong>{readOnly ? " (acesso somente leitura)" : ""}. Os
+          usuários do sistema são gerenciados no painel do Supabase (Authentication → Users) — é
+          lá que você cria, remove ou redefine senhas e permissões de acesso.
         </div>
       </div>
     </div>
@@ -1801,6 +1970,7 @@ html, body, #root { height: 100%; margin: 0; }
 .avatar { width:30px; height:30px; border-radius:50%; background:var(--gold); color:#1a1a1a; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; }
 .sidebar-user-name { font-size:12.5px; font-weight:600; }
 .sidebar-user-role { font-size:10.5px; color:#A9B8A6; }
+.readonly-badge { display:inline-block; margin-left:6px; padding:1px 7px; border-radius:999px; background:#B8863B; color:#1a1a1a; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; }
 .logout-item { color:#E8B4AC; }
 .sidebar-backdrop { display:none; }
 .main-area { flex:1; display:flex; flex-direction:column; min-width:0; }
@@ -1857,6 +2027,7 @@ html, body, #root { height: 100%; margin: 0; }
 .field-label { display:block; font-size:11px; color:var(--ink-soft); margin-bottom:4px; font-weight:500; }
 input, select { font-family:'Inter',sans-serif; font-size:13px; padding:8px 10px; border-radius:6px; border:1px solid var(--line); background:var(--surface); color:var(--ink); width:100%; }
 input:focus, select:focus { outline:2px solid var(--teal); outline-offset:1px; border-color:var(--teal); }
+input:disabled { background:#EDEEE8; color:var(--ink-soft); cursor:not-allowed; }
 .btn-primary { display:inline-flex; align-items:center; gap:6px; background:var(--ink); color:#fff; border:none; padding:9px 16px; border-radius:7px; font-size:13px; font-weight:600; cursor:pointer; }
 .btn-primary:hover { background:var(--teal); }
 .btn-primary:disabled { opacity:.6; cursor:default; }

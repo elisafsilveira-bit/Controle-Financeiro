@@ -55,6 +55,12 @@ const CATEGORIAS = [
   { id: "sistema_gestao", label: "Sistema de Gestão", grupo: "opAdmin", tipo: "saida", dre: true },
   { id: "material_expediente", label: "Material de Expediente", grupo: "opAdmin", tipo: "saida", dre: true },
   { id: "honorarios_contabeis", label: "Honorários Contábeis", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "manutencao_reparos", label: "Manutenção e Reparos", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "transporte", label: "Transporte / Combustível", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "confraternizacao", label: "Confraternização e Reuniões", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "servicos_terceiros", label: "Serviços de Terceiros", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "limpeza_higiene", label: "Limpeza e Higiene", grupo: "opAdmin", tipo: "saida", dre: true },
+  { id: "decoracao_visual", label: "Decoração e Visual Merchandising", grupo: "opAdmin", tipo: "saida", dre: true },
 
   // Resultado Financeiro
   { id: "receitas_financeiras", label: "Receitas Financeiras (Outras)", grupo: "recFin", tipo: "entrada", dre: true },
@@ -373,7 +379,6 @@ const REGRAS_CLASSIFICACAO = [
   [/sal[aá]rio/, "salarios_equipe"],
 
   // Estrutura / utilidades
-  [/predial/, "administrativas"],
   [/aluguel|condom[ií]nio/, "aluguel_loja"],
   [/(^|\s)[aá]gua(\s|$)|luz|energia|internet|telefone/, "agua_luz_internet"],
   [/contabilidade|honor[aá]rio.*cont[aá]bil/, "honorarios_contabeis"],
@@ -416,7 +421,13 @@ const REGRAS_CLASSIFICACAO = [
   [/venda|receita de vendas|faturamento|^caixa$|rec cart[aã]o|cart[aã]o|pedido|ordem de servi[cç]o/, "receita_vendas"],
 
   // Genéricos (última linha de defesa antes do fallback por sinal)
-  [/curso|treinamento|higieniza|decora[cç][aã]o|supermercado|terceiro/, "administrativas"],
+  [/ferragem|predial|manuten[cç][aã]o|equipamentos?/, "manutencao_reparos"],
+  [/transporte|gasolina|combust[ií]vel/, "transporte"],
+  [/reuni[aã]o|confraterniza/, "confraternizacao"],
+  [/terceiro/, "servicos_terceiros"],
+  [/higieniza|cozinha|supermercado/, "limpeza_higiene"],
+  [/decora[cç][aã]o/, "decoracao_visual"],
+  [/curso|treinamento/, "administrativas"],
   [/despesa.*administrativ|administrativ/, "administrativas"],
   [/despesa.*financeira|financeira/, "despesas_financeiras"],
   [/despesa.*comercial|comercial/, "comerciais"],
@@ -1437,8 +1448,11 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
   const [dataCaixa, setDataCaixa] = useState(new Date().toISOString().slice(0, 10));
   const [filtroCnpj, setFiltroCnpj] = useState("todos");
   const [filtroStatus, setFiltroStatus] = useState("todos");
+  const [filtroAno, setFiltroAno] = useState("todos");
+  const [filtroMes, setFiltroMes] = useState("todos");
   const [marcandoPago, setMarcandoPago] = useState(null); // entry sendo marcada como paga
   const [editando, setEditando] = useState(null); // entry sendo editada
+  const [loteModal, setLoteModal] = useState(false);
 
   const addEntry = async (e) => {
     e.preventDefault();
@@ -1462,11 +1476,27 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
     setEditando(null);
   };
 
-  const listados = entries
+  const anosDisponiveisLista = useMemo(() => anosDisponiveis(entries), [entries]);
+
+  const filtrados = entries
     .filter((e) => filtroCnpj === "todos" || e.cnpj === filtroCnpj)
     .filter((e) => filtroStatus === "todos" || statusEfetivo(e) === filtroStatus)
-    .sort((a, b) => (a.data < b.data ? 1 : -1))
-    .slice(0, 200);
+    .filter((e) => filtroAno === "todos" || e.data.startsWith(String(filtroAno)))
+    .filter((e) => filtroMes === "todos" || e.data.slice(5, 7) === String(filtroMes).padStart(2, "0"))
+    .sort((a, b) => (a.data < b.data ? 1 : -1));
+  const listados = filtrados.slice(0, 300);
+  const pendentesFiltrados = filtrados.filter((e) => statusEfetivo(e) === "pendente");
+
+  const confirmarLote = async (modo, dataUnica) => {
+    const idsAlvo = new Set(pendentesFiltrados.map((e) => e.id));
+    const atualizados = entries.map((e) => {
+      if (!idsAlvo.has(e.id)) return e;
+      const novaDataCaixa = modo === "competencia" ? e.data : dataUnica;
+      return { ...e, status: "liquidado", dataCaixa: novaDataCaixa };
+    });
+    await persistEntries(atualizados);
+    setLoteModal(false);
+  };
 
   return (
     <div className="stack">
@@ -1533,8 +1563,16 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
       )}
       <div className="panel">
         <div className="panel-title-row">
-          <div className="panel-title">Últimos lançamentos</div>
+          <div className="panel-title">Lançamentos {filtrados.length !== entries.length ? `(${filtrados.length} filtrados)` : `(${entries.length} no total)`}</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select value={filtroAno} onChange={(e) => setFiltroAno(e.target.value)} className="filter-select">
+              <option value="todos">Todos os anos</option>
+              {anosDisponiveisLista.map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+            <select value={filtroMes} onChange={(e) => setFiltroMes(e.target.value)} className="filter-select">
+              <option value="todos">Todos os meses</option>
+              {MESES_LONGOS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+            </select>
             <select value={filtroStatus} onChange={(e) => setFiltroStatus(e.target.value)} className="filter-select">
               <option value="todos">Todos os status</option>
               <option value="liquidado">Pago / Recebido</option>
@@ -1547,6 +1585,23 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
             </select>
           </div>
         </div>
+        {filtrados.length > listados.length && (
+          <div className="import-text" style={{ margin: "0 0 8px" }}>
+            Mostrando os {listados.length} mais recentes de {filtrados.length} encontrados. Use os
+            filtros de mês/ano acima para ver um período específico por completo.
+          </div>
+        )}
+        {!readOnly && pendentesFiltrados.length > 0 && (
+          <div className="pendencias-panel" style={{ marginBottom: 12, padding: "10px 14px", background: "#FBF3E3", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+            <span className="import-text" style={{ margin: 0 }}>
+              {pendentesFiltrados.length} lançamento(s) pendente(s) dentro do filtro atual não
+              aparecem no Fluxo de Caixa ainda.
+            </span>
+            <button className="btn-primary" onClick={() => setLoteModal(true)}>
+              <Check size={14} /> Marcar {pendentesFiltrados.length} como pago/recebido
+            </button>
+          </div>
+        )}
         <div className="table-scroll">
           <table className="ledger-table">
             <thead><tr><th>Data Competência</th><th>Data Caixa</th><th>Empresa</th><th>Categoria</th><th>Descrição</th><th className="num-cell">Valor</th><th>Status</th>{!readOnly && <th></th>}</tr></thead>
@@ -1604,6 +1659,50 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
           onSave={salvarEdicao}
         />
       )}
+      {!readOnly && loteModal && (
+        <MarcarLotePagoModal
+          quantidade={pendentesFiltrados.length}
+          onCancel={() => setLoteModal(false)}
+          onConfirm={confirmarLote}
+        />
+      )}
+    </div>
+  );
+}
+
+function MarcarLotePagoModal({ quantidade, onCancel, onConfirm }) {
+  const [modo, setModo] = useState("competencia");
+  const [dataUnica, setDataUnica] = useState(new Date().toISOString().slice(0, 10));
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+        <div className="modal-header">
+          <div>Marcar {quantidade} lançamento(s) como pago/recebido</div>
+          <button className="icon-btn" onClick={onCancel}><X size={16} /></button>
+        </div>
+        <div className="modal-body">
+          <p className="import-text" style={{ marginBottom: 14 }}>
+            Útil para dados antigos importados (ex: do Plano de Contas) que na prática já foram
+            pagos/recebidos há tempos, e que agora você quer que também apareçam no Fluxo de Caixa.
+          </p>
+          <label className="field-label" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: "pointer" }}>
+            <input type="radio" name="modo-lote" checked={modo === "competencia"} onChange={() => setModo("competencia")} style={{ width: "auto" }} />
+            Usar a data de competência de cada lançamento como data do pagamento/recebimento
+          </label>
+          <label className="field-label" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: "pointer" }}>
+            <input type="radio" name="modo-lote" checked={modo === "unica"} onChange={() => setModo("unica")} style={{ width: "auto" }} />
+            Usar uma única data para todos
+          </label>
+          {modo === "unica" && (
+            <input type="date" value={dataUnica} onChange={(e) => setDataUnica(e.target.value)} style={{ marginLeft: 26, width: "calc(100% - 26px)" }} />
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={onCancel}>Cancelar</button>
+          <button className="btn-primary" onClick={() => onConfirm(modo, dataUnica)}><Check size={14} /> Confirmar</button>
+        </div>
+      </div>
     </div>
   );
 }

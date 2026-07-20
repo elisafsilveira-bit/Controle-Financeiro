@@ -352,6 +352,7 @@ function parseLancamentosExcel(arrayBuffer, empresas) {
 const REGRAS_CLASSIFICACAO = [
   // Financiamento / patrimônio (NÃO entram na DRE)
   [/aporte/, "aporte_socios"],
+  [/transfer[eê]ncia/, "outras_saidas"],
   [/bens de pequeno valor|bem de pequeno valor|ativo imobilizado|^imobilizado/, "investimento"],
   [/distribui[cç][aã]o.*lucro/, "distribuicao_lucros"],
   [/s[oó]cio/, "pro_labore"],
@@ -497,6 +498,58 @@ function parsePlanoContasExcel(arrayBuffer) {
   });
 
   return { linhas };
+}
+
+/* ---------- Importação do relatório de Contas a Pagar/Receber (para Lançamentos) ----------
+   Formato próprio do sistema: uma linha de cabeçalho limpa com colunas Nome, Emissão,
+   Pagamento, Recebimento, Valor, Classificação etc. Cada linha já tem data de competência
+   (Emissão) e data de pagamento/recebimento reais — dá pra alimentar direto o Fluxo de Caixa
+   regime de caixa. Status é decidido comparando a data de pagamento/recebimento com hoje:
+   se já passou (ou é hoje), consideramos liquidado; se é no futuro, fica pendente. */
+
+function parseContasPagarReceberExcel(arrayBuffer) {
+  const wb = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  const hoje = new Date().toISOString().slice(0, 10);
+
+  const linhas = [];
+  let linhaId = 0;
+  rows.forEach((row) => {
+    const nome = getCell(row, "Nome");
+    const doc = getCell(row, "Nº Doc", "N Doc", "Numero Doc", "Documento");
+    const emissaoRaw = getCell(row, "Emissão", "Emissao");
+    const pagamentoRaw = getCell(row, "Pagamento");
+    const recebimentoRaw = getCell(row, "Recebimento");
+    const valorRaw = getCell(row, "Valor");
+    const classificacaoRaw = getCell(row, "Classificação", "Classificacao");
+
+    if (!classificacaoRaw && !valorRaw) return; // linha em branco
+
+    const valor = Math.abs(parseValorCell(valorRaw) || 0);
+    if (!valor) return;
+
+    let categoriaId = classificarConta(classificacaoRaw);
+    const confiante = !!categoriaId;
+    if (!categoriaId) categoriaId = "outras_saidas";
+    const categoriaInfo = CATEGORIAS.find((c) => c.id === categoriaId);
+    const tipo = categoriaInfo?.tipo || "saida";
+
+    const dataCaixaRaw = tipo === "entrada" ? (recebimentoRaw || pagamentoRaw) : (pagamentoRaw || recebimentoRaw);
+    const dataCaixa = parseDataCell(dataCaixaRaw);
+    const dataCompetencia = parseDataCell(emissaoRaw) || dataCaixa;
+    if (!dataCompetencia || !dataCaixa) return; // sem data suficiente pra lançar
+
+    const status = dataCaixa <= hoje ? "liquidado" : "pendente";
+    const descricao = [nome, doc].filter(Boolean).join(" - ") || classificacaoRaw || "Contas a pagar/receber";
+
+    linhas.push({
+      linhaId: linhaId++, descricao, valor, categoriaId, confiante,
+      dataCompetencia, dataCaixa, status,
+    });
+  });
+
+  return linhas;
 }
 
 
@@ -1231,6 +1284,14 @@ function BalancoLinha({ label, v }) { return <tr><td style={{ paddingLeft: 12 }}
 function FluxoCaixaView({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth }) {
   const anos = anosDisponiveis(entries);
   const [modo, setModo] = useState("mensal");
+  const [diaFoco, setDiaFoco] = useState(new Date().toISOString().slice(0, 10));
+
+  const mudarDia = (novaData) => {
+    setDiaFoco(novaData);
+    const [y, m] = novaData.split("-").map(Number);
+    if (y) setSelectedYear(y);
+    if (m) setSelectedMonth(m);
+  };
 
   const pendentes = useMemo(() => filterEntries(entries, cnpjSel).filter((e) => statusEfetivo(e) === "pendente"), [entries, cnpjSel]);
   const pendReceber = pendentes.filter((e) => catInfo(e.categoriaId).tipo === "entrada").reduce((a, e) => a + e.valor, 0);
@@ -1261,16 +1322,24 @@ function FluxoCaixaView({ entries, cnpjSel, selectedYear, selectedMonth, setSele
           </div>
         </div>
       )}
-      <PeriodBar anos={anos} selectedYear={selectedYear} selectedMonth={selectedMonth}
-        setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} showMonth={modo === "diario"} />
-      {modo === "diario" && <FluxoDiario entries={entries} cnpjSel={cnpjSel} year={selectedYear} month={selectedMonth} />}
+      {modo === "diario" ? (
+        <div className="period-bar">
+          <Calendar size={15} className="period-icon" />
+          <label className="field-label" style={{ margin: 0 }}>Dia:</label>
+          <input type="date" value={diaFoco} onChange={(e) => mudarDia(e.target.value)} style={{ width: "auto" }} />
+        </div>
+      ) : (
+        <PeriodBar anos={anos} selectedYear={selectedYear} selectedMonth={selectedMonth}
+          setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} showMonth={false} />
+      )}
+      {modo === "diario" && <FluxoDiario entries={entries} cnpjSel={cnpjSel} year={selectedYear} month={selectedMonth} diaFoco={diaFoco} />}
       {modo === "mensal" && <FluxoMensal entries={entries} cnpjSel={cnpjSel} year={selectedYear} />}
       {modo === "anual" && <FluxoAnual entries={entries} cnpjSel={cnpjSel} anos={anos} />}
     </div>
   );
 }
 
-function FluxoDiario({ entries, cnpjSel, year, month }) {
+function FluxoDiario({ entries, cnpjSel, year, month, diaFoco }) {
   const filtered = entriesCaixa(entries, cnpjSel).filter((e) => {
     const [y, m] = dataCaixaEfetiva(e).split("-").map(Number);
     return y === year && m === month;
@@ -1296,8 +1365,23 @@ function FluxoDiario({ entries, cnpjSel, year, month }) {
     return { data: d, saldoAbertura, entradas, saidas, saldoDia: entradas - saidas, acumulado };
   });
   const chartData = linhas.map((l) => ({ label: l.data.slice(8, 10), Saldo: l.acumulado }));
+
+  const resumoDia = useMemo(() => {
+    const exata = linhas.find((l) => l.data === diaFoco);
+    if (exata) return exata;
+    const anteriores = linhas.filter((l) => l.data < diaFoco);
+    const saldoAntes = anteriores.length ? anteriores[anteriores.length - 1].acumulado : saldoInicial;
+    return { data: diaFoco, saldoAbertura: saldoAntes, entradas: 0, saidas: 0, acumulado: saldoAntes };
+  }, [linhas, diaFoco, saldoInicial]);
+
   return (
     <div className="stack">
+      <div className="card-grid">
+        <MetricCard label={`Saldo de abertura — ${diaFoco.split("-").reverse().join("/")}`} value={fmtBRL(resumoDia.saldoAbertura)} icon={Wallet} tone="gold" />
+        <MetricCard label="Entradas do dia" value={fmtBRL(resumoDia.entradas)} icon={TrendingUp} tone="teal" />
+        <MetricCard label="Saídas do dia" value={fmtBRL(resumoDia.saidas)} icon={TrendingDown} tone="red" />
+        <MetricCard label="Saldo final do dia" value={fmtBRL(resumoDia.acumulado)} icon={Scale} tone={resumoDia.acumulado >= 0 ? "teal" : "red"} />
+      </div>
       <div className="panel">
         <div className="panel-title">Saldo acumulado no mês (regime de caixa)</div>
         <ResponsiveContainer width="100%" height={220}>
@@ -1318,7 +1402,7 @@ function FluxoDiario({ entries, cnpjSel, year, month }) {
             <thead><tr><th>Data</th><th className="num-cell">Saldo Inicial</th><th className="num-cell">Entradas</th><th className="num-cell">Saídas</th><th className="num-cell">Saldo Final do Dia</th></tr></thead>
             <tbody>
               {linhas.map((l) => (
-                <tr key={l.data}>
+                <tr key={l.data} className={l.data === diaFoco ? "row-dia-foco" : ""}>
                   <td>{l.data.split("-").reverse().join("/")}</td>
                   <td className="num-cell">{fmtBRL(l.saldoAbertura)}</td>
                   <td className="num-cell positive">{fmtBRL(l.entradas)}</td>
@@ -1509,6 +1593,7 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
           </div>
         </div>
       )}
+      {!readOnly && <ImportarContasPagarReceber empresas={empresas} entries={entries} persistEntries={persistEntries} />}
       {!readOnly && <ImportarExcel empresas={empresas} onImport={importarEmLote} />}
       {!readOnly && (
       <div className="panel">
@@ -1965,6 +2050,154 @@ function ImportarPlanoContas({ empresas, entries, persistEntries }) {
   );
 }
 
+function ImportarContasPagarReceber({ empresas, entries, persistEntries }) {
+  const [aberto, setAberto] = useState(false);
+  const [cnpj, setCnpj] = useState("a");
+  const [linhas, setLinhas] = useState(null);
+  const [nomeArquivo, setNomeArquivo] = useState("");
+  const [processando, setProcessando] = useState(false);
+  const [importando, setImportando] = useState(false);
+  const [concluido, setConcluido] = useState(null);
+  const inputRef = React.useRef(null);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setProcessando(true);
+    setConcluido(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      setLinhas(parseContasPagarReceberExcel(buffer));
+      setNomeArquivo(file.name);
+    } catch (err) {
+      console.error(err);
+      setLinhas([]);
+      setNomeArquivo(file.name);
+    }
+    setProcessando(false);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const atualizarCategoria = (linhaId, categoriaId) => {
+    setLinhas((prev) => prev.map((l) => l.linhaId === linhaId ? { ...l, categoriaId, confiante: true } : l));
+  };
+
+  const todasLinhas = linhas || [];
+  const confiantes = todasLinhas.filter((l) => l.confiante);
+  const paraRevisar = todasLinhas.filter((l) => !l.confiante);
+  const jaLiquidados = todasLinhas.filter((l) => l.status === "liquidado").length;
+  const aindaPendentes = todasLinhas.length - jaLiquidados;
+
+  const confirmarImportacao = async () => {
+    if (todasLinhas.length === 0) return;
+    setImportando(true);
+    const novos = todasLinhas.map((l, i) => ({
+      id: Date.now() + i,
+      cnpj, data: l.dataCompetencia, categoriaId: l.categoriaId, valor: l.valor,
+      descricao: l.descricao,
+      status: l.status, dataCaixa: l.status === "liquidado" ? l.dataCaixa : null,
+    }));
+    await persistEntries([...novos, ...entries]);
+    setImportando(false);
+    setConcluido(novos.length);
+    setLinhas(null);
+  };
+
+  return (
+    <div className="panel">
+      <div className="panel-title-row">
+        <div className="panel-title">Importar Contas a Pagar/Receber (relatório do sistema)</div>
+        <button className="btn-secondary" onClick={() => setAberto((s) => !s)}>{aberto ? "Ocultar" : "Abrir"}</button>
+      </div>
+      {aberto && (
+        <div className="import-box">
+          <p className="import-text">
+            Suba aqui o relatório de contas a pagar/receber exportado do seu sistema (colunas
+            Nome, Emissão, Pagamento, Recebimento, Valor, Classificação). Cada linha já traz a
+            data de competência e a data de pagamento/recebimento reais, então alimenta tanto a
+            DRE quanto o Fluxo de Caixa de uma vez. Uma conta com data de pagamento/recebimento
+            até hoje entra como <strong>Pago/Recebido</strong>; com data futura, entra como
+            <strong> Pendente</strong> (aparece no Fluxo de Caixa só quando a data chegar e você
+            confirmar, ou usando o botão de marcar em lote).
+          </p>
+          <div className="import-actions" style={{ alignItems: "flex-end" }}>
+            <div>
+              <label className="field-label">Empresa</label>
+              <select value={cnpj} onChange={(e) => setCnpj(e.target.value)}>
+                <option value="a">{empresas.a.nome}</option>
+                <option value="b">{empresas.b.nome}</option>
+              </select>
+            </div>
+            <label className="btn-primary import-upload-btn">
+              <Plus size={14} /> Selecionar relatório
+              <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} hidden />
+            </label>
+          </div>
+
+          {processando && <div className="empty-note">Lendo arquivo…</div>}
+          {concluido !== null && (
+            <div className="import-success"><Check size={14} /> {concluido} lançamento(s) importado(s).</div>
+          )}
+
+          {linhas && (
+            <div className="import-preview">
+              <div className="import-preview-summary">
+                <span><strong>{nomeArquivo}</strong></span>
+                <span className="positive">{confiantes.length} reconhecida(s) automaticamente</span>
+                {paraRevisar.length > 0 && <span className="negative">{paraRevisar.length} com sugestão genérica — revise</span>}
+                <span>{jaLiquidados} já pago/recebido · {aindaPendentes} pendente(s)</span>
+              </div>
+              {todasLinhas.length === 0 ? (
+                <div className="empty-note">
+                  Não encontrei linhas válidas. Confira se é o relatório certo (com colunas
+                  Nome, Emissão, Pagamento, Recebimento, Valor e Classificação).
+                </div>
+              ) : (
+                <div className="table-scroll">
+                  <table className="ledger-table">
+                    <thead><tr><th>Descrição</th><th>Competência</th><th>Pagto/Receb.</th><th className="num-cell">Valor</th><th>Status</th><th>Categoria</th></tr></thead>
+                    <tbody>
+                      {todasLinhas.map((l) => (
+                        <tr key={l.linhaId} className={!l.confiante ? "row-atencao" : ""}>
+                          <td>{l.descricao}</td>
+                          <td>{l.dataCompetencia.split("-").reverse().join("/")}</td>
+                          <td>{l.dataCaixa.split("-").reverse().join("/")}</td>
+                          <td className="num-cell">{fmtBRL(l.valor)}</td>
+                          <td>{l.status === "liquidado" ? <span className="status-badge status-pago">Pago/Receb.</span> : <span className="status-badge status-pendente">Pendente</span>}</td>
+                          <td>
+                            <select value={l.categoriaId} onChange={(e) => atualizarCategoria(l.linhaId, e.target.value)}>
+                              <optgroup label="Contas de resultado (entram na DRE)">
+                                {CATEGORIAS.filter((c) => c.dre).map((c) => (
+                                  <option key={c.id} value={c.id}>{c.label} {c.tipo === "entrada" ? "↑" : "↓"}</option>
+                                ))}
+                              </optgroup>
+                              <optgroup label="Fora da DRE (financiamento/patrimônio)">
+                                {CATEGORIAS.filter((c) => !c.dre).map((c) => (
+                                  <option key={c.id} value={c.id}>{c.label} {c.tipo === "entrada" ? "↑" : "↓"}</option>
+                                ))}
+                              </optgroup>
+                            </select>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="import-confirm-row">
+                <button className="btn-secondary" onClick={() => setLinhas(null)}>Cancelar</button>
+                <button className="btn-primary" disabled={todasLinhas.length === 0 || importando} onClick={confirmarImportacao}>
+                  {importando ? "Importando…" : `Confirmar importação de ${todasLinhas.length} lançamento(s)`}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ImportarExcel({ empresas, onImport }) {
   const [aberto, setAberto] = useState(false);
   const [preview, setPreview] = useState(null); // { validos, erros, nomeArquivo }
@@ -2250,6 +2483,7 @@ input:disabled { background:#EDEEE8; color:var(--ink-soft); cursor:not-allowed; 
 .pendencias-row { display:flex; gap:20px; flex-wrap:wrap; align-items:center; font-size:13px; }
 .row-atencao td { background:#FBF3E3; }
 .row-atencao select { border-color:var(--gold); }
+.row-dia-foco td { background:#E4EFE9; font-weight:600; }
 .config-row { padding:12px 0; border-bottom:1px solid var(--line); }
 .config-row:last-of-type { border-bottom:none; }
 .config-row-title { font-weight:600; font-size:13px; margin-bottom:8px; }

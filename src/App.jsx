@@ -433,13 +433,13 @@ function classificarConta(nomeConta) {
 // Linhas de estrutura do relatório que nunca são lançamentos de verdade
 const LINHAS_IGNORAR = /^impresso em|^p[aá]gina \d|^filtro:|^total:?$|^acumulado$|^contas a (pagar|receber)$|^an[aá]lise do plano de contas/i;
 
-function parsePlanoContasExcel(arrayBuffer, mesSelecionado) {
+function parsePlanoContasExcel(arrayBuffer) {
   const wb = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: true });
 
-  let colunaDoMes = null; // índice da coluna que corresponde ao mês escolhido
-  let anoDetectado = null;
+  let colunasPorMes = null; // { 1: idxColuna, 2: idxColuna, ... } para o bloco de cabeçalho atual
+  let anoAtual = null;
   const linhas = [];
   let linhaId = 0;
 
@@ -451,37 +451,41 @@ function parsePlanoContasExcel(arrayBuffer, mesSelecionado) {
       return acc;
     }, {});
     if (Object.keys(mesesEncontrados).length >= 6) {
-      colunaDoMes = mesesEncontrados[mesSelecionado] ?? null;
+      colunasPorMes = mesesEncontrados;
       const possivelAno = row.find((c) => typeof c === "number" && c >= 2000 && c <= 2100);
-      if (possivelAno) anoDetectado = possivelAno;
+      if (possivelAno) anoAtual = possivelAno;
       return; // linha de cabeçalho, não é lançamento
     }
-    if (colunaDoMes === null) return; // ainda não achamos nenhum cabeçalho de mês
+    if (!colunasPorMes || !anoAtual) return; // ainda não achamos nenhum cabeçalho de mês/ano
 
     const contaRaw = row[0];
     const conta = String(contaRaw ?? "").trim();
     if (!conta || LINHAS_IGNORAR.test(conta) || /^\d{4}$/.test(conta)) return;
 
-    const valorCel = row[colunaDoMes];
-    const valorNum = typeof valorCel === "number" ? valorCel : parseValorCell(valorCel);
-    if (!valorNum) return; // 0 ou vazio = sem movimento naquele mês
+    // Extrai o valor de TODOS os meses presentes no cabeçalho atual, não só um
+    Object.entries(colunasPorMes).forEach(([mesStr, colIdx]) => {
+      const mes = Number(mesStr);
+      const valorCel = row[colIdx];
+      const valorNum = typeof valorCel === "number" ? valorCel : parseValorCell(valorCel);
+      if (!valorNum) return; // 0 ou vazio = sem movimento naquele mês
 
-    let categoriaId = classificarConta(conta);
-    let confiante = !!categoriaId;
-    if (!categoriaId) {
-      categoriaId = valorNum >= 0 ? "receita_vendas" : "outras_saidas";
-    } else {
-      // se o sinal do valor não bate com o tipo esperado da categoria (ex: um "crédito"
-      // com valor positivo caindo numa categoria de saída), marca para revisão manual
-      const categoriaInfo = CATEGORIAS.find((c) => c.id === categoriaId);
-      const tipoEsperado = valorNum >= 0 ? "entrada" : "saida";
-      if (categoriaInfo && categoriaInfo.tipo !== tipoEsperado) confiante = false;
-    }
+      let categoriaId = classificarConta(conta);
+      let confiante = !!categoriaId;
+      if (!categoriaId) {
+        categoriaId = valorNum >= 0 ? "receita_vendas" : "outras_saidas";
+      } else {
+        // se o sinal do valor não bate com o tipo esperado da categoria (ex: um "crédito"
+        // com valor positivo caindo numa categoria de saída), marca para revisão manual
+        const categoriaInfo = CATEGORIAS.find((c) => c.id === categoriaId);
+        const tipoEsperado = valorNum >= 0 ? "entrada" : "saida";
+        if (categoriaInfo && categoriaInfo.tipo !== tipoEsperado) confiante = false;
+      }
 
-    linhas.push({ linhaId: linhaId++, conta, valor: Math.abs(valorNum), categoriaId, confiante });
+      linhas.push({ linhaId: linhaId++, conta, mes, ano: anoAtual, valor: Math.abs(valorNum), categoriaId, confiante });
+    });
   });
 
-  return { linhas, anoDetectado };
+  return { linhas };
 }
 
 
@@ -983,8 +987,7 @@ function DREView({ entries, cnpjSel, empresas, persistEntries, selectedYear, sel
         </div>
       </div>
       {!readOnly && (
-        <ImportarPlanoContas empresas={empresas} entries={entries} persistEntries={persistEntries}
-          selectedYear={selectedYear} selectedMonth={selectedMonth} />
+        <ImportarPlanoContas empresas={empresas} entries={entries} persistEntries={persistEntries} />
       )}
       <PeriodBar anos={anos} selectedYear={selectedYear} selectedMonth={selectedMonth}
         setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} showMonth={modo === "mensal"} />
@@ -1699,13 +1702,10 @@ function MarcarPagoModal({ entry, onCancel, onConfirm }) {
   );
 }
 
-function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, selectedMonth }) {
+function ImportarPlanoContas({ empresas, entries, persistEntries }) {
   const [aberto, setAberto] = useState(false);
   const [cnpj, setCnpj] = useState("a");
-  const [ano, setAno] = useState(selectedYear);
-  const [mes, setMes] = useState(selectedMonth);
   const [linhas, setLinhas] = useState(null); // preview editável
-  const [anoDetectado, setAnoDetectado] = useState(null);
   const [nomeArquivo, setNomeArquivo] = useState("");
   const [processando, setProcessando] = useState(false);
   const [importando, setImportando] = useState(false);
@@ -1719,14 +1719,12 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
     setConcluido(null);
     try {
       const buffer = await file.arrayBuffer();
-      const { linhas: contas, anoDetectado: anoArq } = parsePlanoContasExcel(buffer, mes);
+      const { linhas: contas } = parsePlanoContasExcel(buffer);
       setLinhas(contas);
-      setAnoDetectado(anoArq);
       setNomeArquivo(file.name);
     } catch (err) {
       console.error(err);
       setLinhas([]);
-      setAnoDetectado(null);
       setNomeArquivo(file.name);
     }
     setProcessando(false);
@@ -1741,19 +1739,31 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
   const confiantes = todasLinhas.filter((l) => l.confiante);
   const paraRevisar = todasLinhas.filter((l) => !l.confiante);
 
+  const resumoPorMes = useMemo(() => {
+    const mapa = {};
+    todasLinhas.forEach((l) => {
+      const chave = `${l.ano}-${String(l.mes).padStart(2, "0")}`;
+      mapa[chave] = (mapa[chave] || 0) + 1;
+    });
+    return Object.entries(mapa).sort(([a], [b]) => (a < b ? -1 : 1));
+  }, [todasLinhas]);
+
   const confirmarImportacao = async () => {
     if (todasLinhas.length === 0) return;
     setImportando(true);
-    const dataCompetencia = `${ano}-${String(mes).padStart(2, "0")}-${String(new Date(ano, mes, 0).getDate()).padStart(2, "0")}`;
-    const novos = todasLinhas.map((l, i) => ({
-      id: Date.now() + i,
-      cnpj, data: dataCompetencia, categoriaId: l.categoriaId, valor: l.valor,
-      descricao: `Plano de Contas: ${l.conta}`,
-      status: "pendente", dataCaixa: null, // só afeta a DRE (competência), não o Fluxo de Caixa
-    }));
+    const novos = todasLinhas.map((l, i) => {
+      const ultimoDia = new Date(l.ano, l.mes, 0).getDate();
+      const dataCompetencia = `${l.ano}-${String(l.mes).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
+      return {
+        id: Date.now() + i,
+        cnpj, data: dataCompetencia, categoriaId: l.categoriaId, valor: l.valor,
+        descricao: `Plano de Contas: ${l.conta}`,
+        status: "pendente", dataCaixa: null, // só afeta a DRE (competência), não o Fluxo de Caixa
+      };
+    });
     await persistEntries([...novos, ...entries]);
     setImportando(false);
-    setConcluido(novos.length);
+    setConcluido({ total: novos.length, meses: resumoPorMes.length });
     setLinhas(null);
   };
 
@@ -1767,10 +1777,11 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
         <div className="import-box">
           <p className="import-text">
             Suba aqui o relatório "Análise do plano de contas (realizado)" exportado do seu
-            sistema contábil. O app localiza a coluna do mês escolhido abaixo e tenta reconhecer
-            automaticamente cada conta (receita, custo, despesa, ou até aporte/empréstimo — que
-            não entram na DRE). Linhas com fundo amarelo são sugestões genéricas: confira antes
-            de confirmar. Esses lançamentos entram só na DRE (competência), não no Fluxo de Caixa.
+            sistema contábil. O app lê <strong>todos os meses que o relatório tiver</strong> de
+            uma vez (não precisa importar mês a mês) e tenta reconhecer automaticamente cada
+            conta (receita, custo, despesa, ou até aporte/empréstimo — que não entram na DRE).
+            Linhas com fundo amarelo são sugestões genéricas: confira antes de confirmar. Esses
+            lançamentos entram só na DRE (competência), não no Fluxo de Caixa.
           </p>
           <div className="import-actions" style={{ alignItems: "flex-end" }}>
             <div>
@@ -1780,53 +1791,45 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
                 <option value="b">{empresas.b.nome}</option>
               </select>
             </div>
-            <div>
-              <label className="field-label">Mês de referência</label>
-              <select value={mes} onChange={(e) => setMes(Number(e.target.value))}>
-                {MESES_LONGOS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="field-label">Ano</label>
-              <input type="number" value={ano} onChange={(e) => setAno(Number(e.target.value))} style={{ width: 90 }} />
-            </div>
             <label className="btn-primary import-upload-btn">
               <Plus size={14} /> Selecionar relatório
               <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} hidden />
             </label>
           </div>
-          <div className="import-text" style={{ marginTop: -4 }}>
-            Escolha o mês/ano <strong>antes</strong> de selecionar o arquivo — o app lê a coluna
-            correspondente a esse mês dentro do relatório.
-          </div>
 
           {processando && <div className="empty-note">Lendo arquivo…</div>}
           {concluido !== null && (
-            <div className="import-success"><Check size={14} /> {concluido} conta(s) importada(s) para a DRE de {MESES_LONGOS[mes - 1]}/{ano}.</div>
+            <div className="import-success"><Check size={14} /> {concluido.total} conta(s) importada(s) para a DRE, cobrindo {concluido.meses} mês(es).</div>
           )}
 
           {linhas && (
             <div className="import-preview">
-              {anoDetectado && anoDetectado !== ano && (
-                <div className="balance-check"><AlertCircle size={13} /> Este arquivo parece ser do ano {anoDetectado}, mas você selecionou {ano}. Confira o campo "Ano" acima se não for intencional.</div>
-              )}
               <div className="import-preview-summary">
                 <span><strong>{nomeArquivo}</strong></span>
                 <span className="positive">{confiantes.length} conta(s) reconhecida(s) automaticamente</span>
                 {paraRevisar.length > 0 && <span className="negative">{paraRevisar.length} conta(s) com sugestão genérica — revise antes de confirmar</span>}
               </div>
+              {resumoPorMes.length > 0 && (
+                <div className="import-text" style={{ margin: 0 }}>
+                  Meses encontrados: {resumoPorMes.map(([chave, qtd]) => {
+                    const [ano, mes] = chave.split("-").map(Number);
+                    return `${MESES[mes - 1]}/${ano} (${qtd})`;
+                  }).join(" · ")}
+                </div>
+              )}
               {todasLinhas.length === 0 ? (
                 <div className="empty-note">
-                  Nenhum valor encontrado para {MESES_LONGOS[mes - 1]}/{ano} neste arquivo. Confira se
-                  escolheu o mês certo, ou se o relatório realmente tem movimento nesse período.
+                  Não encontrei nenhum valor de movimento neste arquivo. Confira se é o relatório
+                  certo ("Análise do plano de contas") e se ele tem algum mês com movimento.
                 </div>
               ) : (
                 <div className="table-scroll">
                   <table className="ledger-table">
-                    <thead><tr><th>Conta (original)</th><th className="num-cell">Valor</th><th>Classificação na DRE</th></tr></thead>
+                    <thead><tr><th>Mês/Ano</th><th>Conta (original)</th><th className="num-cell">Valor</th><th>Classificação na DRE</th></tr></thead>
                     <tbody>
                       {todasLinhas.map((l) => (
                         <tr key={l.linhaId} className={!l.confiante ? "row-atencao" : ""}>
+                          <td>{MESES[l.mes - 1]}/{l.ano}</td>
                           <td>{l.conta}</td>
                           <td className="num-cell">{fmtBRL(l.valor)}</td>
                           <td>
@@ -1852,7 +1855,7 @@ function ImportarPlanoContas({ empresas, entries, persistEntries, selectedYear, 
               <div className="import-confirm-row">
                 <button className="btn-secondary" onClick={() => setLinhas(null)}>Cancelar</button>
                 <button className="btn-primary" disabled={todasLinhas.length === 0 || importando} onClick={confirmarImportacao}>
-                  {importando ? "Importando…" : `Confirmar importação de ${todasLinhas.length} conta(s) para ${MESES_LONGOS[mes - 1]}/${ano}`}
+                  {importando ? "Importando…" : `Confirmar importação de ${todasLinhas.length} conta(s) em ${resumoPorMes.length} mês(es)`}
                 </button>
               </div>
             </div>

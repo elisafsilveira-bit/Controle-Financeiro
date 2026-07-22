@@ -532,10 +532,10 @@ function parseContasPagarReceberExcel(arrayBuffer) {
     let categoriaId = classificarConta(classificacaoRaw);
     const confiante = !!categoriaId;
     if (!categoriaId) categoriaId = "outras_saidas";
-    const categoriaInfo = CATEGORIAS.find((c) => c.id === categoriaId);
-    const tipo = categoriaInfo?.tipo || "saida";
 
-    const dataCaixaRaw = tipo === "entrada" ? (recebimentoRaw || pagamentoRaw) : (pagamentoRaw || recebimentoRaw);
+    // No sistema dela, "Pagamento" é a data real de liquidação (tanto pra contas a
+    // pagar quanto a receber) — "Recebimento" às vezes só repete a Emissão.
+    const dataCaixaRaw = pagamentoRaw || recebimentoRaw;
     const dataCaixa = parseDataCell(dataCaixaRaw);
     const dataCompetencia = parseDataCell(emissaoRaw) || dataCaixa;
     if (!dataCompetencia || !dataCaixa) return; // sem data suficiente pra lançar
@@ -1534,6 +1534,8 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
   const [filtroStatus, setFiltroStatus] = useState("todos");
   const [filtroAno, setFiltroAno] = useState("todos");
   const [filtroMes, setFiltroMes] = useState("todos");
+  const [busca, setBusca] = useState("");
+  const [ordenacao, setOrdenacao] = useState({ campo: "data", direcao: "desc" });
   const [marcandoPago, setMarcandoPago] = useState(null); // entry sendo marcada como paga
   const [editando, setEditando] = useState(null); // entry sendo editada
   const [loteModal, setLoteModal] = useState(false);
@@ -1562,12 +1564,32 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
 
   const anosDisponiveisLista = useMemo(() => anosDisponiveis(entries), [entries]);
 
+  const alternarOrdenacao = (campo) => {
+    setOrdenacao((prev) => prev.campo === campo ? { campo, direcao: prev.direcao === "asc" ? "desc" : "asc" } : { campo, direcao: "asc" });
+  };
+
+  const valorOrdenavel = (e, campo) => {
+    switch (campo) {
+      case "data": return e.data;
+      case "empresa": return normalizeStr(empresas[e.cnpj]?.nome);
+      case "categoria": return normalizeStr(catInfo(e.categoriaId).label);
+      case "descricao": return normalizeStr(e.descricao);
+      case "valor": return e.valor;
+      default: return e.data;
+    }
+  };
+
   const filtrados = entries
     .filter((e) => filtroCnpj === "todos" || e.cnpj === filtroCnpj)
     .filter((e) => filtroStatus === "todos" || statusEfetivo(e) === filtroStatus)
     .filter((e) => filtroAno === "todos" || e.data.startsWith(String(filtroAno)))
     .filter((e) => filtroMes === "todos" || e.data.slice(5, 7) === String(filtroMes).padStart(2, "0"))
-    .sort((a, b) => (a.data < b.data ? 1 : -1));
+    .filter((e) => !busca.trim() || normalizeStr(e.descricao).includes(normalizeStr(busca)))
+    .sort((a, b) => {
+      const va = valorOrdenavel(a, ordenacao.campo), vb = valorOrdenavel(b, ordenacao.campo);
+      const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+      return ordenacao.direcao === "asc" ? cmp : -cmp;
+    });
   const listados = filtrados.slice(0, 300);
   const pendentesFiltrados = filtrados.filter((e) => statusEfetivo(e) === "pendente");
 
@@ -1650,6 +1672,13 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
         <div className="panel-title-row">
           <div className="panel-title">Lançamentos {filtrados.length !== entries.length ? `(${filtrados.length} filtrados)` : `(${entries.length} no total)`}</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+              placeholder="Buscar fornecedor/cliente na descrição…"
+              className="filter-select"
+              style={{ width: 240 }}
+            />
             <select value={filtroAno} onChange={(e) => setFiltroAno(e.target.value)} className="filter-select">
               <option value="todos">Todos os anos</option>
               {anosDisponiveisLista.map((a) => <option key={a} value={a}>{a}</option>)}
@@ -1689,7 +1718,15 @@ function LancamentosView({ entries, empresas, persistEntries, readOnly }) {
         )}
         <div className="table-scroll">
           <table className="ledger-table">
-            <thead><tr><th>Data Competência</th><th>Data Caixa</th><th>Empresa</th><th>Categoria</th><th>Descrição</th><th className="num-cell">Valor</th><th>Status</th>{!readOnly && <th></th>}</tr></thead>
+            <thead><tr>
+              <th className="th-sortable" onClick={() => alternarOrdenacao("data")}>Data Competência{ordenacao.campo === "data" && (ordenacao.direcao === "asc" ? " ▲" : " ▼")}</th>
+              <th>Data Caixa</th>
+              <th className="th-sortable" onClick={() => alternarOrdenacao("empresa")}>Empresa{ordenacao.campo === "empresa" && (ordenacao.direcao === "asc" ? " ▲" : " ▼")}</th>
+              <th className="th-sortable" onClick={() => alternarOrdenacao("categoria")}>Categoria{ordenacao.campo === "categoria" && (ordenacao.direcao === "asc" ? " ▲" : " ▼")}</th>
+              <th className="th-sortable" onClick={() => alternarOrdenacao("descricao")}>Descrição{ordenacao.campo === "descricao" && (ordenacao.direcao === "asc" ? " ▲" : " ▼")}</th>
+              <th className="num-cell th-sortable" onClick={() => alternarOrdenacao("valor")}>Valor{ordenacao.campo === "valor" && (ordenacao.direcao === "asc" ? " ▲" : " ▼")}</th>
+              <th>Status</th>{!readOnly && <th></th>}
+            </tr></thead>
             <tbody>
               {listados.map((e) => {
                 const c = catInfo(e.categoriaId);
@@ -2462,6 +2499,8 @@ html, body, #root { height: 100%; margin: 0; }
 .table-scroll { overflow-x:auto; }
 .ledger-table { width:100%; border-collapse:collapse; font-size:13px; }
 .ledger-table th { text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-soft); padding:8px 12px; border-bottom:1px solid var(--line); background:var(--paper); }
+.th-sortable { cursor:pointer; user-select:none; }
+.th-sortable:hover { color:var(--ink); }
 .ledger-table td { padding:7px 12px; border-bottom:1px solid #E4E7DF; font-family:'IBM Plex Mono',monospace; }
 .ledger-table td:first-child { font-family:'Inter',sans-serif; }
 .num-cell { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }

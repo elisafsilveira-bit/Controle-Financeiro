@@ -2081,6 +2081,12 @@ function ImportarContasPagarReceber({ empresas, entries, persistEntries }) {
   const atualizarCategoria = (linhaId, categoriaId) => {
     setLinhas((prev) => prev.map((l) => l.linhaId === linhaId ? { ...l, categoriaId, confiante: true } : l));
   };
+  const atualizarStatus = (linhaId, status) => {
+    setLinhas((prev) => prev.map((l) => l.linhaId === linhaId ? { ...l, status } : l));
+  };
+  const marcarTodosComo = (status) => {
+    setLinhas((prev) => prev.map((l) => ({ ...l, status })));
+  };
 
   const todasLinhas = linhas || [];
   const confiantes = todasLinhas.filter((l) => l.confiante);
@@ -2147,6 +2153,16 @@ function ImportarContasPagarReceber({ empresas, entries, persistEntries }) {
                 {paraRevisar.length > 0 && <span className="negative">{paraRevisar.length} com sugestão genérica — revise</span>}
                 <span>{jaLiquidados} já pago/recebido · {aindaPendentes} pendente(s)</span>
               </div>
+              {todasLinhas.length > 0 && (
+                <div className="import-text" style={{ margin: 0 }}>
+                  O status de cada linha é só uma <strong>sugestão</strong> baseada na data de
+                  pagamento/recebimento do arquivo — como isso pode ser só a data programada (e
+                  não uma confirmação real), revise e ajuste manualmente na coluna "Status" antes
+                  de confirmar. Atalhos para agilizar:{" "}
+                  <button className="btn-secondary" style={{ padding: "2px 10px", fontSize: 11.5 }} onClick={() => marcarTodosComo("pendente")}>Marcar todos como Pendente</button>{" "}
+                  <button className="btn-secondary" style={{ padding: "2px 10px", fontSize: 11.5 }} onClick={() => marcarTodosComo("liquidado")}>Marcar todos como Pago/Recebido</button>
+                </div>
+              )}
               {todasLinhas.length === 0 ? (
                 <div className="empty-note">
                   Não encontrei linhas válidas. Confira se é o relatório certo (com colunas
@@ -2163,7 +2179,12 @@ function ImportarContasPagarReceber({ empresas, entries, persistEntries }) {
                           <td>{l.dataCompetencia.split("-").reverse().join("/")}</td>
                           <td>{l.dataCaixa.split("-").reverse().join("/")}</td>
                           <td className="num-cell">{fmtBRL(l.valor)}</td>
-                          <td>{l.status === "liquidado" ? <span className="status-badge status-pago">Pago/Receb.</span> : <span className="status-badge status-pendente">Pendente</span>}</td>
+                          <td>
+                            <select value={l.status} onChange={(e) => atualizarStatus(l.linhaId, e.target.value)} className={l.status === "liquidado" ? "status-select-pago" : "status-select-pendente"}>
+                              <option value="liquidado">Pago/Recebido</option>
+                              <option value="pendente">Pendente</option>
+                            </select>
+                          </td>
                           <td>
                             <select value={l.categoriaId} onChange={(e) => atualizarCategoria(l.linhaId, e.target.value)}>
                               <optgroup label="Contas de resultado (entram na DRE)">
@@ -2484,6 +2505,8 @@ input:disabled { background:#EDEEE8; color:var(--ink-soft); cursor:not-allowed; 
 .row-atencao td { background:#FBF3E3; }
 .row-atencao select { border-color:var(--gold); }
 .row-dia-foco td { background:#E4EFE9; font-weight:600; }
+.status-select-pago { color:#155444; border-color:#1F6F5C; background:#E4EFE9; font-weight:600; }
+.status-select-pendente { color:#8A5A16; border-color:#B8863B; background:#FBEFD8; font-weight:600; }
 .config-row { padding:12px 0; border-bottom:1px solid var(--line); }
 .config-row:last-of-type { border-bottom:none; }
 .config-row-title { font-weight:600; font-size:13px; margin-bottom:8px; }

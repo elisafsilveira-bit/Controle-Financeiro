@@ -577,6 +577,7 @@ export default function App() {
   const [cnpjSel, setCnpjSel] = useState("consolidado");
   const [entries, setEntries] = useState([]);
   const [balancos, setBalancos] = useState({ a: {}, b: {} });
+  const [saldosBancarios, setSaldosBancarios] = useState({ a: {}, b: {} });
   const [empresas, setEmpresas] = useState(EMPRESAS_PADRAO);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
@@ -592,14 +593,16 @@ export default function App() {
     if (!session) return;
     (async () => {
       setReady(false);
-      const [e, b, emp] = await Promise.all([
+      const [e, b, emp, sb] = await Promise.all([
         loadKey("lancamentos", []),
         loadKey("balancos", { a: {}, b: {} }),
         loadKey("empresas", EMPRESAS_PADRAO),
+        loadKey("saldosBancarios", { a: {}, b: {} }),
       ]);
       setEntries(e || []);
       setBalancos(b || { a: {}, b: {} });
       setEmpresas(emp || EMPRESAS_PADRAO);
+      setSaldosBancarios(sb || { a: {}, b: {} });
       setReady(true);
     })();
   }, [session]);
@@ -607,6 +610,7 @@ export default function App() {
   const persistEntries = useCallback(async (next) => { setEntries(next); await saveKey("lancamentos", next); }, []);
   const persistBalancos = useCallback(async (next) => { setBalancos(next); await saveKey("balancos", next); }, []);
   const persistEmpresas = useCallback(async (next) => { setEmpresas(next); await saveKey("empresas", next); }, []);
+  const persistSaldosBancarios = useCallback(async (next) => { setSaldosBancarios(next); await saveKey("saldosBancarios", next); }, []);
 
   if (session === undefined) {
     return <div className="loading-full">Carregando…</div>;
@@ -651,7 +655,8 @@ export default function App() {
                 persistBalancos={persistBalancos} readOnly={user.readOnly} />
             )}
             {view === "fluxo" && (
-              <FluxoCaixaView entries={entries} cnpjSel={cnpjSel}
+              <FluxoCaixaView entries={entries} cnpjSel={cnpjSel} empresas={empresas}
+                saldosBancarios={saldosBancarios} persistSaldosBancarios={persistSaldosBancarios} readOnly={user.readOnly}
                 selectedYear={selectedYear} selectedMonth={selectedMonth}
                 setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} />
             )}
@@ -1281,7 +1286,7 @@ function BalancoLinha({ label, v }) { return <tr><td style={{ paddingLeft: 12 }}
 
 /* ============================== FLUXO DE CAIXA ============================== */
 
-function FluxoCaixaView({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth }) {
+function FluxoCaixaView({ entries, cnpjSel, empresas, saldosBancarios, persistSaldosBancarios, readOnly, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth }) {
   const anos = anosDisponiveis(entries);
   const [modo, setModo] = useState("mensal");
   const [diaFoco, setDiaFoco] = useState(new Date().toISOString().slice(0, 10));
@@ -1332,9 +1337,112 @@ function FluxoCaixaView({ entries, cnpjSel, selectedYear, selectedMonth, setSele
         <PeriodBar anos={anos} selectedYear={selectedYear} selectedMonth={selectedMonth}
           setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} showMonth={false} />
       )}
+      {modo === "diario" && (
+        <SaldoBancarioPanel empresas={empresas} saldosBancarios={saldosBancarios}
+          persistSaldosBancarios={persistSaldosBancarios} dia={diaFoco} readOnly={readOnly} />
+      )}
       {modo === "diario" && <FluxoDiario entries={entries} cnpjSel={cnpjSel} year={selectedYear} month={selectedMonth} diaFoco={diaFoco} />}
       {modo === "mensal" && <FluxoMensal entries={entries} cnpjSel={cnpjSel} year={selectedYear} />}
       {modo === "anual" && <FluxoAnual entries={entries} cnpjSel={cnpjSel} anos={anos} />}
+    </div>
+  );
+}
+
+const CONTAS_BANCARIAS = [
+  { id: "sicredi", label: "SICREDI" },
+  { id: "banrisul", label: "BANRISUL" },
+  { id: "cofre", label: "DINHEIRO - COFRE" },
+  { id: "caixaFisico", label: "CAIXA" },
+];
+const SALDO_BANCARIO_VAZIO = Object.fromEntries(CONTAS_BANCARIAS.map((c) => [c.id, 0]));
+
+function SaldoBancarioPanel({ empresas, saldosBancarios, persistSaldosBancarios, dia, readOnly }) {
+  const [editando, setEditando] = useState(false);
+  const saldoA = { ...SALDO_BANCARIO_VAZIO, ...(saldosBancarios.a?.[dia] || {}) };
+  const saldoB = { ...SALDO_BANCARIO_VAZIO, ...(saldosBancarios.b?.[dia] || {}) };
+  const totalA = CONTAS_BANCARIAS.reduce((acc, c) => acc + (saldoA[c.id] || 0), 0);
+  const totalB = CONTAS_BANCARIAS.reduce((acc, c) => acc + (saldoB[c.id] || 0), 0);
+
+  const salvar = async (novoA, novoB) => {
+    const next = {
+      a: { ...saldosBancarios.a, [dia]: novoA },
+      b: { ...saldosBancarios.b, [dia]: novoB },
+    };
+    await persistSaldosBancarios(next);
+    setEditando(false);
+  };
+
+  return (
+    <div className="panel ledger-panel">
+      <div className="panel-title-row" style={{ padding: "0 20px" }}>
+        <div className="panel-title" style={{ marginBottom: 0 }}>Saldo em Bancos e Caixa — {dia.split("-").reverse().join("/")}</div>
+        {!readOnly && <button className="btn-primary" onClick={() => setEditando(true)}>Editar saldos do dia</button>}
+      </div>
+      <table className="ledger-table">
+        <thead><tr><th>Conta</th><th className="num-cell">{empresas.a.nome}</th><th className="num-cell">{empresas.b.nome}</th><th className="num-cell total-col">Total</th></tr></thead>
+        <tbody>
+          {CONTAS_BANCARIAS.map((c) => {
+            const va = saldoA[c.id] || 0, vb = saldoB[c.id] || 0;
+            return (
+              <tr key={c.id}>
+                <td>{c.label}</td>
+                <td className="num-cell">{fmtBRL(va)}</td>
+                <td className="num-cell">{fmtBRL(vb)}</td>
+                <td className="num-cell total-col">{fmtBRL(va + vb)}</td>
+              </tr>
+            );
+          })}
+          <tr className="row-bold row-divider">
+            <td>Total</td>
+            <td className="num-cell">{fmtBRL(totalA)}</td>
+            <td className="num-cell">{fmtBRL(totalB)}</td>
+            <td className="num-cell total-col">{fmtBRL(totalA + totalB)}</td>
+          </tr>
+        </tbody>
+      </table>
+      {!readOnly && editando && (
+        <EditarSaldoBancarioModal dia={dia} empresas={empresas} valoresA={saldoA} valoresB={saldoB}
+          onCancel={() => setEditando(false)} onSave={salvar} />
+      )}
+    </div>
+  );
+}
+
+function EditarSaldoBancarioModal({ dia, empresas, valoresA, valoresB, onCancel, onSave }) {
+  const [formA, setFormA] = useState(valoresA);
+  const [formB, setFormB] = useState(valoresB);
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>Saldo em Bancos e Caixa — {dia.split("-").reverse().join("/")}</div>
+          <button className="icon-btn" onClick={onCancel}><X size={16} /></button>
+        </div>
+        <div className="modal-body">
+          <div className="balanco-form-group">
+            <div className="balanco-form-title">{empresas.a.nome}</div>
+            {CONTAS_BANCARIAS.map((c) => (
+              <div key={c.id} className="balanco-form-row">
+                <span>{c.label}</span>
+                <input type="number" step="0.01" value={formA[c.id]} onChange={(e) => setFormA({ ...formA, [c.id]: Number(e.target.value) })} />
+              </div>
+            ))}
+          </div>
+          <div className="balanco-form-group">
+            <div className="balanco-form-title">{empresas.b.nome}</div>
+            {CONTAS_BANCARIAS.map((c) => (
+              <div key={c.id} className="balanco-form-row">
+                <span>{c.label}</span>
+                <input type="number" step="0.01" value={formB[c.id]} onChange={(e) => setFormB({ ...formB, [c.id]: Number(e.target.value) })} />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={onCancel}>Cancelar</button>
+          <button className="btn-primary" onClick={() => onSave(formA, formB)}><Check size={14} /> Salvar</button>
+        </div>
+      </div>
     </div>
   );
 }

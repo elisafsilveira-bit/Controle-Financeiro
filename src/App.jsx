@@ -640,7 +640,7 @@ export default function App() {
         ) : (
           <div className="view-body">
             {view === "dashboard" && (
-              <Dashboard entries={entries} cnpjSel={cnpjSel} empresas={empresas}
+              <Dashboard entries={entries} cnpjSel={cnpjSel} empresas={empresas} saldosBancarios={saldosBancarios}
                 selectedYear={selectedYear} selectedMonth={selectedMonth}
                 setSelectedYear={setSelectedYear} setSelectedMonth={setSelectedMonth} />
             )}
@@ -857,7 +857,7 @@ function anosDisponiveis(entries) {
 
 /* ============================== DASHBOARD ============================== */
 
-function Dashboard({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth }) {
+function Dashboard({ entries, cnpjSel, empresas, saldosBancarios, selectedYear, selectedMonth, setSelectedYear, setSelectedMonth }) {
   const anos = anosDisponiveis(entries);
   const dreAtual = useMemo(() => computeDRE(entries, cnpjSel, selectedYear, selectedMonth), [entries, cnpjSel, selectedYear, selectedMonth]);
   const hojeStr = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-31`;
@@ -932,6 +932,15 @@ function Dashboard({ entries, cnpjSel, selectedYear, selectedMonth, setSelectedY
         <MetricCard label="Despesas do mês" value={fmtBRL(despesasTotal)} icon={TrendingDown} tone="red" />
         <MetricCard label="Saldo em caixa no fim do mês" value={fmtBRL(saldoFimMes)} icon={Scale} tone={saldoFimMes >= 0 ? "teal" : "red"} />
       </div>
+
+      {empresas && saldosBancarios && (
+        <TabelaSaldoBancario
+          titulo={`Saldo em Bancos e Caixa — fechamento de ${MESES_LONGOS[selectedMonth - 1]}/${selectedYear}`}
+          empresas={empresas}
+          saldoA={ultimoSaldoBancario(saldosBancarios, "a", hojeStr)}
+          saldoB={ultimoSaldoBancario(saldosBancarios, "b", hojeStr)}
+        />
+      )}
 
       <div className="chart-grid">
         <div className="panel">
@@ -1395,8 +1404,8 @@ function FluxoCaixaView({ entries, cnpjSel, empresas, saldosBancarios, persistSa
           persistSaldosBancarios={persistSaldosBancarios} dia={diaFoco} readOnly={readOnly} />
       )}
       {modo === "diario" && <FluxoDiario entries={entries} cnpjSel={cnpjSel} year={selectedYear} month={selectedMonth} diaFoco={diaFoco} />}
-      {modo === "mensal" && <FluxoMensal entries={entries} cnpjSel={cnpjSel} year={selectedYear} />}
-      {modo === "anual" && <FluxoAnual entries={entries} cnpjSel={cnpjSel} anos={anos} />}
+      {modo === "mensal" && <FluxoMensal entries={entries} cnpjSel={cnpjSel} year={selectedYear} empresas={empresas} saldosBancarios={saldosBancarios} />}
+      {modo === "anual" && <FluxoAnual entries={entries} cnpjSel={cnpjSel} anos={anos} empresas={empresas} saldosBancarios={saldosBancarios} />}
     </div>
   );
 }
@@ -1409,27 +1418,23 @@ const CONTAS_BANCARIAS = [
 ];
 const SALDO_BANCARIO_VAZIO = Object.fromEntries(CONTAS_BANCARIAS.map((c) => [c.id, 0]));
 
-function SaldoBancarioPanel({ empresas, saldosBancarios, persistSaldosBancarios, dia, readOnly }) {
-  const [editando, setEditando] = useState(false);
-  const saldoA = { ...SALDO_BANCARIO_VAZIO, ...(saldosBancarios.a?.[dia] || {}) };
-  const saldoB = { ...SALDO_BANCARIO_VAZIO, ...(saldosBancarios.b?.[dia] || {}) };
+// Acha o último snapshot de saldo bancário registrado até (e incluindo) uma data —
+// o saldo bancário não "zera" a cada dia, então usamos o mais recente conhecido.
+function ultimoSaldoBancario(saldosBancarios, cnpj, ateData) {
+  const registros = saldosBancarios?.[cnpj] || {};
+  const datasValidas = Object.keys(registros).filter((d) => d <= ateData).sort();
+  if (datasValidas.length === 0) return { ...SALDO_BANCARIO_VAZIO };
+  return { ...SALDO_BANCARIO_VAZIO, ...registros[datasValidas[datasValidas.length - 1]] };
+}
+
+function TabelaSaldoBancario({ titulo, empresas, saldoA, saldoB, acao }) {
   const totalA = CONTAS_BANCARIAS.reduce((acc, c) => acc + (saldoA[c.id] || 0), 0);
   const totalB = CONTAS_BANCARIAS.reduce((acc, c) => acc + (saldoB[c.id] || 0), 0);
-
-  const salvar = async (novoA, novoB) => {
-    const next = {
-      a: { ...saldosBancarios.a, [dia]: novoA },
-      b: { ...saldosBancarios.b, [dia]: novoB },
-    };
-    await persistSaldosBancarios(next);
-    setEditando(false);
-  };
-
   return (
     <div className="panel ledger-panel">
       <div className="panel-title-row" style={{ padding: "0 20px" }}>
-        <div className="panel-title" style={{ marginBottom: 0 }}>Saldo em Bancos e Caixa — {dia.split("-").reverse().join("/")}</div>
-        {!readOnly && <button className="btn-primary" onClick={() => setEditando(true)}>Editar saldos do dia</button>}
+        <div className="panel-title" style={{ marginBottom: 0 }}>{titulo}</div>
+        {acao}
       </div>
       <table className="ledger-table">
         <thead><tr><th>Conta</th><th className="num-cell">{empresas.a.nome}</th><th className="num-cell">{empresas.b.nome}</th><th className="num-cell total-col">Total</th></tr></thead>
@@ -1453,11 +1458,36 @@ function SaldoBancarioPanel({ empresas, saldosBancarios, persistSaldosBancarios,
           </tr>
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function SaldoBancarioPanel({ empresas, saldosBancarios, persistSaldosBancarios, dia, readOnly }) {
+  const [editando, setEditando] = useState(false);
+  const saldoA = { ...SALDO_BANCARIO_VAZIO, ...(saldosBancarios.a?.[dia] || {}) };
+  const saldoB = { ...SALDO_BANCARIO_VAZIO, ...(saldosBancarios.b?.[dia] || {}) };
+
+  const salvar = async (novoA, novoB) => {
+    const next = {
+      a: { ...saldosBancarios.a, [dia]: novoA },
+      b: { ...saldosBancarios.b, [dia]: novoB },
+    };
+    await persistSaldosBancarios(next);
+    setEditando(false);
+  };
+
+  return (
+    <>
+      <TabelaSaldoBancario
+        titulo={`Saldo em Bancos e Caixa — ${dia.split("-").reverse().join("/")}`}
+        empresas={empresas} saldoA={saldoA} saldoB={saldoB}
+        acao={!readOnly && <button className="btn-primary" onClick={() => setEditando(true)}>Editar saldos do dia</button>}
+      />
       {!readOnly && editando && (
         <EditarSaldoBancarioModal dia={dia} empresas={empresas} valoresA={saldoA} valoresB={saldoB}
           onCancel={() => setEditando(false)} onSave={salvar} />
       )}
-    </div>
+    </>
   );
 }
 
@@ -1579,7 +1609,7 @@ function FluxoDiario({ entries, cnpjSel, year, month, diaFoco }) {
   );
 }
 
-function FluxoMensal({ entries, cnpjSel, year }) {
+function FluxoMensal({ entries, cnpjSel, year, empresas, saldosBancarios }) {
   const inicioAno = `${year}-01-01`;
   const saldoInicial = useMemo(() => {
     const antes = entriesCaixa(entries, cnpjSel).filter((e) => dataCaixaEfetiva(e) < inicioAno);
@@ -1594,10 +1624,27 @@ function FluxoMensal({ entries, cnpjSel, year }) {
     filtered.forEach((e) => { const c = catInfo(e.categoriaId); if (c.tipo === "entrada") entradas += e.valor; else saidas += e.valor; });
     const saldoAbertura = acumulado;
     acumulado += entradas - saidas;
-    linhas.push({ mes: MESES[m - 1], saldoAbertura, entradas, saidas, saldoMes: entradas - saidas, acumulado });
+    const ultimoDiaMes = `${year}-${mm}-${String(new Date(year, m, 0).getDate()).padStart(2, "0")}`;
+    const saldoBancoMes = CONTAS_BANCARIAS.reduce((acc, c) => {
+      const sa = ultimoSaldoBancario(saldosBancarios, "a", ultimoDiaMes)[c.id] || 0;
+      const sb = ultimoSaldoBancario(saldosBancarios, "b", ultimoDiaMes)[c.id] || 0;
+      return acc + sa + sb;
+    }, 0);
+    linhas.push({ mes: MESES[m - 1], saldoAbertura, entradas, saidas, saldoMes: entradas - saidas, acumulado, saldoBancoMes });
   }
+
+  const ultimoDiaAno = `${year}-12-31`;
+  const saldoFimAnoA = ultimoSaldoBancario(saldosBancarios, "a", ultimoDiaAno);
+  const saldoFimAnoB = ultimoSaldoBancario(saldosBancarios, "b", ultimoDiaAno);
+
   return (
     <div className="stack">
+      {empresas && (
+        <TabelaSaldoBancario
+          titulo={`Saldo em Bancos e Caixa — fechamento mais recente até 31/12/${year}`}
+          empresas={empresas} saldoA={saldoFimAnoA} saldoB={saldoFimAnoB}
+        />
+      )}
       <div className="panel">
         <div className="panel-title">Entradas x Saídas por mês (regime de caixa) — {year}</div>
         <ResponsiveContainer width="100%" height={260}>
@@ -1616,7 +1663,7 @@ function FluxoMensal({ entries, cnpjSel, year }) {
         <div className="panel-title">Saldo inicial do ano: {fmtBRL(saldoInicial)}</div>
         <div className="formula-caption">Saldo Inicial + Entradas − Saídas = Saldo Final do Mês</div>
         <table className="ledger-table">
-          <thead><tr><th>Mês</th><th className="num-cell">Saldo Inicial</th><th className="num-cell">Entradas</th><th className="num-cell">Saídas</th><th className="num-cell">Saldo Final</th></tr></thead>
+          <thead><tr><th>Mês</th><th className="num-cell">Saldo Inicial</th><th className="num-cell">Entradas</th><th className="num-cell">Saídas</th><th className="num-cell">Saldo Final</th><th className="num-cell">Saldo em Bancos (fechamento)</th></tr></thead>
           <tbody>
             {linhas.map((l) => (
               <tr key={l.mes}>
@@ -1625,16 +1672,22 @@ function FluxoMensal({ entries, cnpjSel, year }) {
                 <td className="num-cell positive">{fmtBRL(l.entradas)}</td>
                 <td className="num-cell negative">{fmtBRL(l.saidas)}</td>
                 <td className="num-cell row-bold">{fmtBRL(l.acumulado)}</td>
+                <td className="num-cell">{fmtBRL(l.saldoBancoMes)}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        <div className="empty-note" style={{ textAlign: "left", fontStyle: "normal" }}>
+          "Saldo em Bancos (fechamento)" usa o último registro que você salvou em Fluxo de Caixa
+          → Diário → "Editar saldos do dia", até o fim de cada mês (não zera se não houver um
+          registro exato naquele dia).
+        </div>
       </div>
     </div>
   );
 }
 
-function FluxoAnual({ entries, cnpjSel, anos }) {
+function FluxoAnual({ entries, cnpjSel, anos, empresas, saldosBancarios }) {
   let acumulado = 0;
   const linhas = anos.map((year) => {
     const filtered = entriesCaixa(entries, cnpjSel).filter((e) => dataCaixaEfetiva(e).startsWith(`${year}`));
@@ -1642,10 +1695,25 @@ function FluxoAnual({ entries, cnpjSel, anos }) {
     filtered.forEach((e) => { const c = catInfo(e.categoriaId); if (c.tipo === "entrada") entradas += e.valor; else saidas += e.valor; });
     const saldoAbertura = acumulado;
     acumulado += entradas - saidas;
-    return { ano: year, saldoAbertura, entradas, saidas, saldoAno: entradas - saidas, acumulado };
+    const ultimoDiaAno = `${year}-12-31`;
+    const saldoBancoAno = CONTAS_BANCARIAS.reduce((acc, c) => {
+      const sa = ultimoSaldoBancario(saldosBancarios, "a", ultimoDiaAno)[c.id] || 0;
+      const sb = ultimoSaldoBancario(saldosBancarios, "b", ultimoDiaAno)[c.id] || 0;
+      return acc + sa + sb;
+    }, 0);
+    return { ano: year, saldoAbertura, entradas, saidas, saldoAno: entradas - saidas, acumulado, saldoBancoAno };
   });
+  const ultimoAno = Math.max(...anos);
+  const saldoAtualA = ultimoSaldoBancario(saldosBancarios, "a", `${ultimoAno}-12-31`);
+  const saldoAtualB = ultimoSaldoBancario(saldosBancarios, "b", `${ultimoAno}-12-31`);
   return (
     <div className="stack">
+      {empresas && (
+        <TabelaSaldoBancario
+          titulo={`Saldo em Bancos e Caixa — fechamento mais recente até 31/12/${ultimoAno}`}
+          empresas={empresas} saldoA={saldoAtualA} saldoB={saldoAtualB}
+        />
+      )}
       <div className="panel">
         <div className="panel-title">Entradas x Saídas por ano (regime de caixa)</div>
         <ResponsiveContainer width="100%" height={260}>
@@ -1663,7 +1731,7 @@ function FluxoAnual({ entries, cnpjSel, anos }) {
       <div className="panel ledger-panel">
         <div className="formula-caption">Saldo Inicial + Entradas − Saídas = Saldo Final do Ano</div>
         <table className="ledger-table">
-          <thead><tr><th>Ano</th><th className="num-cell">Saldo Inicial</th><th className="num-cell">Entradas</th><th className="num-cell">Saídas</th><th className="num-cell">Saldo Final</th></tr></thead>
+          <thead><tr><th>Ano</th><th className="num-cell">Saldo Inicial</th><th className="num-cell">Entradas</th><th className="num-cell">Saídas</th><th className="num-cell">Saldo Final</th><th className="num-cell">Saldo em Bancos (fechamento)</th></tr></thead>
           <tbody>
             {linhas.map((l) => (
               <tr key={l.ano}>
@@ -1672,9 +1740,11 @@ function FluxoAnual({ entries, cnpjSel, anos }) {
                 <td className="num-cell positive">{fmtBRL(l.entradas)}</td>
                 <td className="num-cell negative">{fmtBRL(l.saidas)}</td>
                 <td className="num-cell row-bold">{fmtBRL(l.acumulado)}</td>
+                <td className="num-cell">{fmtBRL(l.saldoBancoAno)}</td>
               </tr>
             ))}
           </tbody>
+
         </table>
       </div>
     </div>

@@ -1070,34 +1070,87 @@ function DREView({ entries, cnpjSel, empresas, persistEntries, selectedYear, sel
 }
 
 const DRE_LINHAS = [
-  { key: "receitaBruta", label: "(=) Receita Operacional Bruta", bold: false, indent: 0 },
-  { key: "deducoes", label: "(–) Deduções da Receita Bruta", bold: false, indent: 0 },
+  { key: "receitaBruta", label: "(=) Receita Operacional Bruta", bold: false, indent: 0, grupos: ["receitaBruta"] },
+  { key: "deducoes", label: "(–) Deduções da Receita Bruta", bold: false, indent: 0, grupos: ["deducoes"] },
   { key: "receitaLiquida", label: "(=) Receita Operacional Líquida", bold: true, indent: 0, divider: true },
-  { key: "cmv", label: "(–) Custo das Mercadorias Vendidas (CMV)", bold: false, indent: 0 },
+  { key: "cmv", label: "(–) Custo das Mercadorias Vendidas (CMV)", bold: false, indent: 0, grupos: ["cmv"] },
   { key: "lucroBruto", label: "(=) Lucro Bruto", bold: true, indent: 0, divider: true },
-  { key: "opVendas", label: "Despesas com Vendas", bold: false, indent: 1 },
-  { key: "opAdmin", label: "Despesas Administrativas", bold: false, indent: 1 },
-  { key: "despesasOperacionais", label: "(–) Total Despesas Operacionais", bold: true, indent: 0, divider: true },
+  { key: "opVendas", label: "Despesas com Vendas", bold: false, indent: 1, grupos: ["opVendas"] },
+  { key: "opAdmin", label: "Despesas Administrativas", bold: false, indent: 1, grupos: ["opAdmin"] },
+  { key: "despesasOperacionais", label: "(–) Total Despesas Operacionais", bold: true, indent: 0, divider: true, grupos: ["opVendas", "opAdmin"] },
   { key: "resultadoOperacional", label: "(=) Resultado Operacional antes do Result. Financeiro", bold: true, indent: 0, divider: true },
-  { key: "recFin", label: "(+) Receitas Financeiras", bold: false, indent: 1 },
-  { key: "despFin", label: "(–) Despesas Financeiras", bold: false, indent: 1 },
-  { key: "resultadoFinanceiro", label: "(=) Resultado Financeiro Líquido", bold: true, indent: 0, divider: true },
+  { key: "recFin", label: "(+) Receitas Financeiras", bold: false, indent: 1, grupos: ["recFin"] },
+  { key: "despFin", label: "(–) Despesas Financeiras", bold: false, indent: 1, grupos: ["despFin"] },
+  { key: "resultadoFinanceiro", label: "(=) Resultado Financeiro Líquido", bold: true, indent: 0, divider: true, grupos: ["recFin", "despFin"] },
   { key: "lucroLiquido", label: "(=) LUCRO OU PREJUÍZO LÍQUIDO DO PERÍODO", bold: true, indent: 0, divider: true, highlight: true },
 ];
 
+function breakdownPorGrupos(entries, cnpjSel, year, month, grupos) {
+  const filtered = filterEntries(entries, cnpjSel).filter((e) => {
+    const [y, m] = e.data.split("-").map(Number);
+    if (y !== year || m !== month) return false;
+    const c = catInfo(e.categoriaId);
+    return c.dre && grupos.includes(c.grupo);
+  });
+  const map = {};
+  filtered.forEach((e) => {
+    const label = catInfo(e.categoriaId).label;
+    map[label] = (map[label] || 0) + e.valor;
+  });
+  return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+}
+
 function DREMensal({ entries, cnpjSel, year, month }) {
   const dre = useMemo(() => computeDRE(entries, cnpjSel, year, month), [entries, cnpjSel, year, month]);
+  const [expandido, setExpandido] = useState({});
+  const alternar = (key) => setExpandido((prev) => ({ ...prev, [key]: !prev[key] }));
+
   return (
     <div className="panel ledger-panel">
       <div className="panel-title">{MESES_LONGOS[month - 1]} de {year}</div>
       <table className="ledger-table">
         <tbody>
-          {DRE_LINHAS.map((l) => (
-            <tr key={l.key} className={(l.bold ? "row-bold " : "") + (l.divider ? "row-divider " : "") + (l.highlight ? "row-highlight" : "")}>
-              <td style={{ paddingLeft: 12 + l.indent * 18 }}>{l.label}</td>
-              <td className="num-cell">{fmtBRL(dre[l.key])}</td>
-            </tr>
-          ))}
+          {DRE_LINHAS.map((l) => {
+            const temDetalhe = !!l.grupos;
+            const aberto = !!expandido[l.key];
+            const detalhe = aberto ? breakdownPorGrupos(entries, cnpjSel, year, month, l.grupos) : [];
+            return (
+              <React.Fragment key={l.key}>
+                <tr
+                  className={(l.bold ? "row-bold " : "") + (l.divider ? "row-divider " : "") + (l.highlight ? "row-highlight " : "") + (temDetalhe ? "row-expansivel" : "")}
+                  onClick={temDetalhe ? () => alternar(l.key) : undefined}
+                >
+                  <td style={{ paddingLeft: 12 + l.indent * 18 }}>
+                    {temDetalhe && <span className="chevron-detalhe">{aberto ? "▾" : "▸"}</span>}
+                    {l.label}
+                  </td>
+                  <td className="num-cell">{fmtBRL(dre[l.key])}</td>
+                </tr>
+                {aberto && (
+                  <tr className="row-detalhe">
+                    <td colSpan={2} style={{ padding: 0 }}>
+                      {detalhe.length === 0 ? (
+                        <div className="empty-note" style={{ padding: "8px 12px 8px " + (30 + l.indent * 18) + "px", textAlign: "left", fontStyle: "normal" }}>
+                          Nenhum lançamento nessa linha em {MESES_LONGOS[month - 1]}/{year}.
+                        </div>
+                      ) : (
+                        <table className="ledger-table detalhe-table">
+                          <tbody>
+                            {detalhe.map((d) => (
+                              <tr key={d.name}>
+                                <td style={{ paddingLeft: 30 + l.indent * 18 }}>{d.name}</td>
+                                <td className="num-cell">{fmtBRL(d.value)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -2616,6 +2669,12 @@ html, body, #root { height: 100%; margin: 0; }
 .row-divider td { border-bottom:1px solid var(--ink); }
 .row-highlight td { background:#E4EFE9; }
 .row-subtitle td { padding-top:14px; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-soft); border-bottom:none; }
+.row-expansivel { cursor:pointer; }
+.row-expansivel:hover td { background:#F1F4EE; }
+.chevron-detalhe { display:inline-block; width:14px; color:var(--ink-soft); font-size:10px; }
+.row-detalhe td { border-bottom:1px solid #E4E7DF; background:#FAFAF6; }
+.detalhe-table { font-size:12px; }
+.detalhe-table td { color:var(--ink-soft); border-bottom:1px solid #EEF0E9; padding:5px 12px; }
 .positive { color:var(--teal); }
 .negative { color:var(--red); }
 .total-col { border-left:2px solid var(--ink); background:#F5F3EC; }
